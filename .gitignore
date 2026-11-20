@@ -1,0 +1,18 @@
+# Build output (rebuild with build.ps1)
+build/
+
+# Packages made for passing the plugin on
+*.zip
+
+# Never commit Hytale's own files or server data
+HytaleServer.jar
+Assets.zip
+config.json
+leaderboard.json
+
+# Editors and OS
+.idea/
+.vscode/
+*.iml
+.DS_Store
+Thumbs.db
