@@ -535,7 +535,7 @@ final class RunManager {
         // The start island and the first jump are there at once; the others fly in one after another.
         List<Platform> all = run.platformList();
         int instant = cfg.flyIslands ? Math.min(2, all.size()) : all.size();
-        run.built = placer.placePlatforms(all.subList(0, instant), cfg.areaColors, cfg.areaMusic).whenComplete((v, err) -> {
+        run.built = placer.placePlatforms(all.subList(0, instant), all, cfg.areaColors, cfg.areaMusic).whenComplete((v, err) -> {
             if (err != null) {
                 log.at(Level.WARNING).withCause(err).log("Could not build the course of %s", name);
             }
@@ -582,9 +582,11 @@ final class RunManager {
 
     private void arrived(Run run, PlayerRef pr, Ref<EntityStore> ref) {
         if (run.pendingFlights != null) {
-            // The game wakes up the world around a player a few tenths of a second after they arrived (objects
-            // made 100 ms after arriving could not be made): the first objects come 400 ms after it.
-            flyIn(run, run.pendingFlights, System.currentTimeMillis() + 400 + IslandMover.HIDE_MS, 150);
+            // The first islands start 600 ms after arriving, but the game wakes up the world around a player
+            // only a few tenths of a second after they arrived (objects made 100 ms after it could not be
+            // made): their objects come 300 ms after arriving at the earliest.
+            long now = System.currentTimeMillis();
+            flyIn(run, run.pendingFlights, now + 600, 150, now + 300);
             run.pendingFlights = null;
         }
         showHud(run, pr, ref);
@@ -646,9 +648,9 @@ final class RunManager {
         }
         if (!add.isEmpty()) {
             if (cfg.flyIslands) {
-                flyIn(run, add, System.currentTimeMillis(), 150);
+                flyIn(run, add, System.currentTimeMillis(), 150, 0);
             } else {
-                placer.placePlatforms(add, cfg.areaColors, cfg.areaMusic);
+                placer.placePlatforms(add, run.platformList(), cfg.areaColors, cfg.areaMusic);
             }
         }
         List<Platform> gone = new ArrayList<>();
@@ -679,7 +681,7 @@ final class RunManager {
      * Islands fly in one after another (stagger ms apart) from startAt: from ahead when that way is
      * free, else from below, above or the side, so they never pass through other islands.
      */
-    private void flyIn(Run run, List<Platform> platforms, long startAt, long stagger) {
+    private void flyIn(Run run, List<Platform> platforms, long startAt, long stagger, long notBefore) {
         long start = startAt;
         for (Platform p : List.copyOf(platforms)) {
             IslandMover.Plan plan = mover.chooseWay(p, run.platforms(), cfg.flyDistance, start, cfg.flyMillis);
@@ -687,7 +689,8 @@ final class RunManager {
             // first, and let the mover make the objects only once that is done (it often has to load sections).
             mover.flyIn(run.playerId, p, plan.way(), cfg.flyDistance, plan.start(), cfg.flyMillis, plantStyle(run.playerId),
                     cfg.areaColors);
-            placer.prepareFlight(List.of(p), plan.way(), cfg.flyDistance, cfg.areaColors, cfg.areaMusic)
+            mover.notBefore(p, notBefore);
+            placer.prepareFlight(List.of(p), run.platformList(), plan.way(), cfg.flyDistance, cfg.areaColors, cfg.areaMusic)
                     .whenComplete((v, err) -> {
                         if (err != null) {
                             log.at(Level.WARNING).withCause(err).log("Could not get an island of %s ready", run.playerName);

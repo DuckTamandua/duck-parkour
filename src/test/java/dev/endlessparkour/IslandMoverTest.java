@@ -224,6 +224,7 @@ public final class IslandMoverTest {
         sendBox();
         staysInGame();
         waitsForColours();
+        firstIslandsNotTooEarly();
         if (failures > 0) {
             System.out.println("FAILED: " + failures);
             System.exit(1);
@@ -898,6 +899,47 @@ public final class IslandMoverTest {
         check(landedAt >= plan.start() + MILLIS && landedAt <= plan.start() + MILLIS + 2 * TICK,
                 "and the island still lands whole and on time (" + (landedAt - plan.start()) + " ms after the start)");
         check(late.mover.colourTotals()[1] == 1 && late.mover.active() == 0, "counted as too late, nothing left over");
+    }
+
+    /**
+     * The first islands of a run start 600 ms after the player arrived, but their objects may not be made
+     * before 300 ms (the world around a new player wakes up late): they still fly whole and on time.
+     */
+    private static void firstIslandsNotTooEarly() {
+        Platform p = biggest(course(52, 40));
+        long[] firstMade = new long[2];
+        long arrived = 1000;
+        for (int run = 0; run < 2; run++) {
+            Sim sim = new Sim();
+            sim.now = arrived;
+            IslandMover.Plan plan = sim.mover.chooseWay(p, List.of(), DISTANCE, arrived + 600, MILLIS);
+            sim.mover.flyIn(OWNER, p, plan.way(), DISTANCE, plan.start(), MILLIS, GROW);
+            if (run == 1) {
+                sim.mover.notBefore(p, arrived + 300);
+            }
+            firstMade[run] = -1;
+            long started = -1;
+            for (int i = 0; i < 80; i++) {
+                sim.tick();
+                if (firstMade[run] < 0 && !sim.objects.live.isEmpty()) {
+                    firstMade[run] = sim.now;
+                }
+                if (started < 0 && sim.objects.live.values().stream().anyMatch(o -> o[1] > 5)) {
+                    started = sim.now;
+                }
+            }
+            if (run == 1) {
+                check(plan.start() == arrived + 600, "the first island still starts 600 ms after arriving ("
+                        + (plan.start() - arrived) + " ms)");
+                check(started >= plan.start() && started <= plan.start() + TICK, "and flies on time");
+                check(sim.objects.next == p.blocks().size(), "with every block");
+            }
+            check(sim.world.blocks.equals(expected(List.of(p))) && sim.objects.live.isEmpty(), "landed whole");
+        }
+        check(firstMade[0] < arrived + 300, "without the limit the objects would come " + (firstMade[0] - arrived)
+                + " ms after arriving (too early: the world is not awake yet)");
+        check(firstMade[1] >= arrived + 300, "with it the first object comes " + (firstMade[1] - arrived)
+                + " ms after arriving (at least 300)");
     }
 
     /** A player stands on island 3 while the next eight islands fly in; returns the watch totals. */

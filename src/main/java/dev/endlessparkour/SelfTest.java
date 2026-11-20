@@ -113,7 +113,7 @@ final class SelfTest {
             }
 
             long t0 = System.nanoTime();
-            placer.placePlatforms(list, cfg.areaColors, cfg.areaMusic).whenComplete((v, err) -> {
+            placer.placePlatforms(list, list, cfg.areaColors, cfg.areaMusic).whenComplete((v, err) -> {
                 long ms = (System.nanoTime() - t0) / 1_000_000;
                 out.accept(Msg.line().text("Placed in ").value(ms + " ms")
                         .text(err == null ? "" : ", error: " + err).build());
@@ -141,7 +141,7 @@ final class SelfTest {
             known.add(p);
             IslandMover.Plan plan = mover.chooseWay(p, known, cfg.flyDistance, start, cfg.flyMillis);
             ways.put(p, plan.way());
-            placer.prepareFlight(List.of(p), plan.way(), cfg.flyDistance, cfg.areaColors, cfg.areaMusic);
+            placer.prepareFlight(List.of(p), known, plan.way(), cfg.flyDistance, cfg.areaColors, cfg.areaMusic);
             mover.flyIn(TEST_OWNER, p, plan.way(), cfg.flyDistance, plan.start(), cfg.flyMillis,
                     IslandMover.PlantStyle.GROW);
             start = plan.start() + FLY_STAGGER;
@@ -255,6 +255,13 @@ final class SelfTest {
         Map<Long, Integer> wantTint = new HashMap<>();
         Map<Long, int[]> sectionBlock = new HashMap<>();
         Map<Long, int[]> columnBlock = new HashMap<>();
+        Map<Long, Integer> wantRim = new HashMap<>();
+        for (Platform p : list) {
+            // The columns around the island get its colour too (where no island of another colour is as near).
+            for (long col : BlockPlacer.marginColumns(p, list)) {
+                wantRim.put(col, p.tint());
+            }
+        }
         for (Platform p : list) {
             int env = cfg.areaMusic ? placer.environmentId(p.theme().environment()) : -1;
             for (Placement pl : p.blocks()) {
@@ -309,9 +316,25 @@ final class SelfTest {
                 tintWrong++;
             }
         }
+        int rimOk = 0;
+        int rimWrong = 0;
+        for (Map.Entry<Long, Integer> e : wantRim.entrySet()) {
+            if (wantTint.containsKey(e.getKey())) {
+                continue;
+            }
+            int got = placer.tintAt(TintMargins.x(e.getKey()), TintMargins.z(e.getKey()));
+            if (got == -1) {
+                unloaded++;
+            } else if (got == e.getValue()) {
+                rimOk++;
+            } else {
+                rimWrong++;
+            }
+        }
         out.accept(Msg.line().text("Areas: environment right in ").value(envOk).text(" sections (")
                 .value(areasSeen.size()).text(" kinds), wrong ").value(envWrong).text("; colour right in ").value(tintOk).text(" columns, wrong ")
-                .value(tintWrong).text(", not loaded ").value(unloaded).build());
+                .value(tintWrong).text("; rim right in ").value(rimOk).text(" columns, wrong ").value(rimWrong)
+                .text(", not loaded ").value(unloaded).build());
     }
 
     private static void clear(BlockPlacer placer, List<Placement> all, Consumer<Message> out, World w) {
