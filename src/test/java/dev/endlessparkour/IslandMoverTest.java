@@ -223,6 +223,7 @@ public final class IslandMoverTest {
         stalledServer();
         sendBox();
         staysInGame();
+        waitsForColours();
         if (failures > 0) {
             System.out.println("FAILED: " + failures);
             System.exit(1);
@@ -682,8 +683,8 @@ public final class IslandMoverTest {
 
         long t0 = sim.now + IslandMover.HIDE_MS;
         sim.mover.flyIn(OWNER, list.get(3), AHEAD, DISTANCE, t0, MILLIS, GROW);
-        for (int i = 0; i < 10; i++) {
-            sim.tick(); // take-off, a batch of objects per tick
+        while (sim.now < t0 + TICK) {
+            sim.tick(); // objects a batch per tick, then the flight starts
         }
         check(sim.objects.live.size() == list.get(3).blocks().size(), "objects made at take-off");
         sim.now = t0 + MILLIS + 10;
@@ -839,6 +840,64 @@ public final class IslandMoverTest {
                 "with the flying box every object is in the game before its flight and stays (" + Arrays.toString(now) + ")");
         System.out.printf("Players' games (modelled): block box %s, flying box %s (odd flights, lost, shown again, "
                 + "late, not in time, early)%n", Arrays.toString(old), Arrays.toString(now));
+    }
+
+    /**
+     * A player's game takes an object's grass colour when it gets the object. An island that waits for its
+     * colours makes no object before they are set (and a moment more), and still flies whole; colours that
+     * come too late: the island lands on time without flying. Without waiting (the order before 1.3.4) the
+     * objects were made before the colours.
+     */
+    private static void waitsForColours() {
+        Platform p = biggest(course(51, 40));
+        long[] firstMade = new long[2];
+        long coloursAt = 0;
+        int made = 0;
+        for (int run = 0; run < 2; run++) {
+            boolean wait = run == 1;
+            Sim sim = new Sim();
+            sim.now = 1000;
+            IslandMover.Plan plan = sim.mover.chooseWay(p, List.of(), DISTANCE, sim.now, MILLIS);
+            sim.mover.flyIn(OWNER, p, plan.way(), DISTANCE, plan.start(), MILLIS, GROW, wait);
+            coloursAt = sim.now + 100; // the sections along the way take a moment to load
+            firstMade[run] = -1;
+            boolean set = false;
+            for (int i = 0; i < 80; i++) {
+                if (!set && sim.now >= coloursAt) {
+                    sim.mover.coloursReady(p);
+                    set = true;
+                }
+                sim.tick();
+                if (firstMade[run] < 0 && !sim.objects.live.isEmpty()) {
+                    firstMade[run] = sim.now;
+                }
+            }
+            made = sim.objects.next;
+            check(sim.world.blocks.equals(expected(List.of(p))) && sim.objects.live.isEmpty(), "landed whole");
+        }
+        check(firstMade[0] >= 0 && firstMade[0] < coloursAt, "without waiting the objects come before the colours (the bug "
+                + "of 1.3.1: first object " + (coloursAt - firstMade[0]) + " ms before them)");
+        check(firstMade[1] >= coloursAt + IslandMover.COLOUR_MARGIN_MS, "waiting for its colours, the first object comes "
+                + (firstMade[1] - coloursAt) + " ms after them (at least " + IslandMover.COLOUR_MARGIN_MS + ")");
+        check(made == p.blocks().size(), "and every block still flew (" + made + " of " + p.blocks().size() + ")");
+
+        Sim late = new Sim();
+        IslandMover.Plan plan = late.mover.chooseWay(p, List.of(), DISTANCE, late.now, MILLIS);
+        late.mover.flyIn(OWNER, p, plan.way(), DISTANCE, plan.start(), MILLIS, GROW, true);
+        long landedAt = -1;
+        for (int i = 0; i < 80; i++) {
+            if (late.now >= plan.start() - IslandMover.SETTLE_MS) {
+                late.mover.coloursReady(p); // far too late
+            }
+            late.tick();
+            if (landedAt < 0 && late.world.blocks.size() == p.blocks().size()) {
+                landedAt = late.now;
+            }
+        }
+        check(late.objects.next == 0, "colours too late: no objects at all (they would fly in the old colour)");
+        check(landedAt >= plan.start() + MILLIS && landedAt <= plan.start() + MILLIS + 2 * TICK,
+                "and the island still lands whole and on time (" + (landedAt - plan.start()) + " ms after the start)");
+        check(late.mover.colourTotals()[1] == 1 && late.mover.active() == 0, "counted as too late, nothing left over");
     }
 
     /** A player stands on island 3 while the next eight islands fly in; returns the watch totals. */

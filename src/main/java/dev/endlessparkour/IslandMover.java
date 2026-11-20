@@ -51,18 +51,25 @@ final class IslandMover {
     /** An object left behind by accident vanishes by itself this long after its flight should be over. */
     static final long SPARE_LIFETIME_MS = 5000;
     /**
-     * Arriving objects are made this long before their flight, far below at {@link #HIDDEN_Y} and tiny,
-     * and only come up when the flight starts: the players' games get them out of sight, and whatever a
-     * game shows of a brand-new object in its first moments happens there. Flights are always planned at
-     * least this far ahead ({@link #chooseWay}).
+     * Arriving objects are made up to this long before their flight, far below at {@link #HIDDEN_Y} and
+     * tiny, and only come up when the flight starts: the players' games get them out of sight, and
+     * whatever a game shows of a brand-new object in its first moments happens there. It also leaves time
+     * to set the island's colours first ({@link #COLOUR_MARGIN_MS}). Flights are always planned at least
+     * this far ahead ({@link #chooseWay}).
      */
-    static final long HIDE_MS = 300;
+    static final long HIDE_MS = 500;
     /**
      * Objects that could not be made at least this long before their flight (a stalled server) do not
      * fly: popping up in the middle of the flight would show. Their blocks simply appear when the
      * island lands.
      */
     static final long SETTLE_MS = 150;
+    /**
+     * A player's game takes the grass colour of an object when it gets the object: the objects of an
+     * island that waits for its colours ({@link #flyIn} with waitForColours) are made only this long after
+     * the colours were set and sent, else the island would fly in the old colour and change it on landing.
+     */
+    static final long COLOUR_MARGIN_MS = 100;
     /** Height where arriving objects are made (the bottom of the world, far below every course). */
     static final double HIDDEN_Y = 1.5;
 
@@ -152,6 +159,13 @@ final class IslandMover {
 
         /** Objects that were not made in time and do not fly (their blocks appear at landing). */
         int notInTime;
+        /** Whether this island waits for its colours, whether they are set, and when (and when it was asked for). */
+        boolean waitsForColours;
+        boolean coloursReady = true;
+        long coloursAt = Long.MIN_VALUE / 2;
+        long askedAt;
+        /** True when its colours came too late and the island flew without objects. */
+        boolean coloursLate;
 
         // What the owner's game got of the objects (the watch, for the log; it changes nothing).
         /** Per object: 0 never sent to the owner's game, 1 sent, 2 taken back. */
@@ -239,6 +253,14 @@ final class IslandMover {
     private long lateSentTotal;
     private long notInTimeTotal;
     private long sentHiddenTotal;
+    // Islands that waited for their colours (per summary line, and since the start).
+    private int colourFlights;
+    private int coloursLate;
+    private long colourWaitSum;
+    private long colourWaitMax;
+    private long colourFlightsTotal;
+    private long coloursLateTotal;
+    private long colourWaitMaxTotal;
 
     /**
      * @param world    the blocks
@@ -409,12 +431,45 @@ final class IslandMover {
 
     /** Lets an island fly in along way: it appears distance blocks away at startAt and lands after duration ms. */
     void flyIn(UUID owner, Platform p, int[] way, int distance, long startAt, long duration, PlantStyle style) {
+        flyIn(owner, p, way, distance, startAt, duration, style, false);
+    }
+
+    /**
+     * Like {@link #flyIn(UUID, Platform, int[], int, long, long, PlantStyle)}; with waitForColours its objects
+     * are made only {@link #COLOUR_MARGIN_MS} after {@link #coloursReady} was called for the island. When
+     * the colours come too late for that, the island lands on time without flying.
+     */
+    void flyIn(UUID owner, Platform p, int[] way, int distance, long startAt, long duration, PlantStyle style,
+               boolean waitForColours) {
         if (byPlatform.containsKey(p)) {
             return;
         }
         Flight f = new Flight(owner, p, true, way, distance, startAt, duration, style);
+        f.askedAt = clock.getAsLong();
+        if (waitForColours) {
+            f.waitsForColours = true;
+            f.coloursReady = false;
+        }
         flights.add(f);
         byPlatform.put(p, f);
+    }
+
+    /** The colours of this island and its way in are set and sent to the players' games. */
+    void coloursReady(Platform p) {
+        Flight f = byPlatform.get(p);
+        if (f != null && f.in && !f.coloursReady) {
+            f.coloursReady = true;
+            f.coloursAt = clock.getAsLong();
+        }
+    }
+
+    /** Its colours came too late to make the objects in time: the island lands on time without flying. */
+    private void coloursTooLate(Flight f) {
+        f.coloursLate = true;
+        f.notInTime += f.objectCount;
+        notInTimeTotal += f.objectCount;
+        f.made = f.objectCount;
+        f.state = State.FLYING;
     }
 
     /** Lets a standing island fly away to the back (-X) from startAt; it is gone about duration ms later. */
@@ -488,6 +543,19 @@ final class IslandMover {
         flights.remove(f);
         if (byPlatform.get(f.platform) == f) {
             byPlatform.remove(f.platform);
+        }
+        if (f.in && f.waitsForColours) {
+            colourFlights++;
+            colourFlightsTotal++;
+            if (f.coloursLate) {
+                coloursLate++;
+                coloursLateTotal++;
+            } else {
+                long wait = Math.max(0, f.coloursAt - f.askedAt);
+                colourWaitSum += wait;
+                colourWaitMax = Math.max(colourWaitMax, wait);
+                colourWaitMaxTotal = Math.max(colourWaitMaxTotal, wait);
+            }
         }
         if (f.watched) {
             noteWatch(f);
@@ -585,9 +653,17 @@ final class IslandMover {
             notes.accept(String.format(Locale.ROOT, "Flight watch: %d arrivals, %d objects: %d were in the game out of "
                     + "sight before their flight, %d reached it only during the flight (latest %d ms in, largest size "
                     + "then %.2f); %d lost during a flight, %d shown again; %d not made in time; %d flights with "
-                    + "something odd; slowest object batch %.1f ms (%d objects)", watchFlights, watchObjects, watchReady,
+                    + "something odd; slowest object batch %.1f ms (%d objects); colours: %d islands set them %d ms "
+                    + "after being asked for on average (latest %d ms), %d flew without objects because the colours "
+                    + "came too late", watchFlights, watchObjects, watchReady,
                     watchLateSent, watchFirstSentMaxMs, watchFirstSentMaxScale, watchLost, watchResent, watchNotInTime,
-                    watchOdd, maxBatchNanos / 1e6, maxBatchCount));
+                    watchOdd, maxBatchNanos / 1e6, maxBatchCount, colourFlights,
+                    colourFlights - coloursLate == 0 ? 0 : colourWaitSum / (colourFlights - coloursLate), colourWaitMax,
+                    coloursLate));
+            colourFlights = 0;
+            coloursLate = 0;
+            colourWaitSum = 0;
+            colourWaitMax = 0;
             watchFlights = 0;
             watchObjects = 0;
             watchReady = 0;
@@ -603,6 +679,11 @@ final class IslandMover {
             maxBatchNanos = 0;
             maxBatchCount = 0;
         }
+    }
+
+    /** Colour totals since the start: islands that waited for their colours, of those too late, longest wait (ms). */
+    long[] colourTotals() {
+        return new long[] {colourFlightsTotal, coloursLateTotal, colourWaitMaxTotal};
     }
 
     /** Watch totals since the start: odd flights, lost, shown again, late in the game, not in time, in the game while hidden. */
@@ -652,8 +733,15 @@ final class IslandMover {
             switch (f.state) {
                 case WAITING -> {
                     if (now >= f.start - (f.in ? HIDE_MS : 0)) {
-                        f.state = State.SPAWNING;
-                        queue(f, () -> spawnBatch(f));
+                        if (f.in && !(f.coloursReady && now >= f.coloursAt + COLOUR_MARGIN_MS)) {
+                            // Its colours are not in the games yet: objects made now would keep the old colour.
+                            if (now > f.start - SETTLE_MS) {
+                                coloursTooLate(f);
+                            }
+                        } else {
+                            f.state = State.SPAWNING;
+                            queue(f, () -> spawnBatch(f));
+                        }
                     }
                 }
                 case SPAWNING -> queue(f, () -> spawnBatch(f));
