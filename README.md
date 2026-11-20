@@ -1,4 +1,4 @@
-# «Duck» Parkour (Hytale server plugin) 1.3.1
+# «Duck» Parkour (Hytale server plugin) 1.3.5
 
 Plugin id and files keep the old name `EndlessParkour` (jar, data folder `EndlessParkour_EndlessParkour`), so the config and top list stay.
 
@@ -72,8 +72,8 @@ smaller platforms, pillars and up-jumps.
 
 ## Install
 
-1. Download `EndlessParkour-<version>.jar` from the [Releases](../../releases) page (or build it, see below)
-   and copy it into the server's `mods` folder (remove older versions).
+1. Build the jar (see "Build" below) and copy `build/EndlessParkour-<version>.jar` into the server's `mods`
+   folder (remove older versions).
 2. Restart the server. The plugin creates the world `parkour` (an empty sky world, rebuilt at every start).
 
 ## Commands

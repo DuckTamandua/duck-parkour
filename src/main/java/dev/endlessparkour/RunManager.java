@@ -582,8 +582,9 @@ final class RunManager {
 
     private void arrived(Run run, PlayerRef pr, Ref<EntityStore> ref) {
         if (run.pendingFlights != null) {
-            // The game wakes up the world around a player a few tenths of a second after they arrived.
-            flyIn(run, run.pendingFlights, System.currentTimeMillis() + 600, 150);
+            // The game wakes up the world around a player a few tenths of a second after they arrived (objects
+            // made 100 ms after arriving could not be made): the first objects come 400 ms after it.
+            flyIn(run, run.pendingFlights, System.currentTimeMillis() + 400 + IslandMover.HIDE_MS, 150);
             run.pendingFlights = null;
         }
         showHud(run, pr, ref);
@@ -682,14 +683,17 @@ final class RunManager {
         long start = startAt;
         for (Platform p : List.copyOf(platforms)) {
             IslandMover.Plan plan = mover.chooseWay(p, run.platforms(), cfg.flyDistance, start, cfg.flyMillis);
-            // The objects take the grass colour of the column they fly through: colour the whole way.
+            // A player's game takes the grass colour of an object when it gets the object: colour the whole way
+            // first, and let the mover make the objects only once that is done (it often has to load sections).
+            mover.flyIn(run.playerId, p, plan.way(), cfg.flyDistance, plan.start(), cfg.flyMillis, plantStyle(run.playerId),
+                    cfg.areaColors);
             placer.prepareFlight(List.of(p), plan.way(), cfg.flyDistance, cfg.areaColors, cfg.areaMusic)
                     .whenComplete((v, err) -> {
                         if (err != null) {
                             log.at(Level.WARNING).withCause(err).log("Could not get an island of %s ready", run.playerName);
                         }
+                        mover.coloursReady(p);
                     });
-            mover.flyIn(run.playerId, p, plan.way(), cfg.flyDistance, plan.start(), cfg.flyMillis, plantStyle(run.playerId));
             start = plan.start() + stagger;
         }
     }

@@ -10,7 +10,7 @@ changing behaviour; most things are already config switches (see "Adapting").
 
 ## What it is
 
-An endless, procedurally generated jump course in the sky (version 1.3.1, built for the Hytale server
+An endless, procedurally generated jump course in the sky (version 1.3.5, built for the Hytale server
 0.7.7, Java 25). Every run starts on a start island in the green "Drifting Plains" and goes on forever
 through 18 areas modelled on Orbis (vanilla names, blocks, plants, grass colours, trees, weather,
 music). Falling ends the run; the next run is a brand-new course. A shared top list keeps everyone's best.
@@ -139,6 +139,12 @@ flying island is therefore a set of **block entities** (`BlockEntity` component 
   later. Tests show 0 cases of islands flying through each other.
 - **Grass colour**: the block entity packet only carries block id + scale; the client tints grass by the
   column the object is in. So the whole flight way is tinted in the area colour first (`prepareFlight`).
+  A player's game takes an object's grass colour when it gets the object, so the objects of an arriving
+  island are made only 100 ms after its colours were set and sent (`flyIn(..., waitForColours)` +
+  `coloursReady`, called when `prepareFlight` completes; it often has to load sections first). 1.3.1 made
+  them at once and islands flew in the old colour, changing it on landing; before 1.3.1 this was hidden
+  because the game rebuilt every object mid-flight (the LOD problem). Colours that come too late: the
+  island lands without flying. Flights are planned 500 ms ahead to leave room for this.
   Keep sending the chunk colours (`updateChunkTints`) for every flight, even when they look unchanged: an
   experiment sent them only on real changes, and the players' games then kept stale colours (flying
   islands showed the wrong colour until a later update). Most of these updates are real changes anyway
