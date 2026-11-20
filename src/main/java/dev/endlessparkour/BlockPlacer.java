@@ -22,6 +22,7 @@ import com.hypixel.hytale.server.core.universe.world.storage.ChunkStore;
 import dev.endlessparkour.course.Placement;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -71,11 +72,20 @@ final class BlockPlacer implements BlockAccess {
      * area's environment (music and ambient sounds), and tells the clients. Completes on the world thread.
      */
     CompletableFuture<Void> placePlatforms(List<Platform> platforms, boolean tints, boolean environments) {
+        return placePlatforms(platforms, null, tints, environments);
+    }
+
+    /**
+     * Like {@link #placePlatforms(List, boolean, boolean)}; with neighbours (the other islands around,
+     * may include these) the columns around each island get its colour too ({@link TintMargins}).
+     */
+    CompletableFuture<Void> placePlatforms(List<Platform> platforms, Collection<Platform> neighbours, boolean tints,
+                                           boolean environments) {
         List<Placement> blocks = new ArrayList<>();
         for (Platform p : platforms) {
             blocks.addAll(p.blocks());
         }
-        return place(blocks).thenRun(() -> applyAreas(platforms, tints, environments, NO_WAY, 0));
+        return place(blocks).thenRun(() -> applyAreas(platforms, neighbours, tints, environments, NO_WAY, 0));
     }
 
     private static final int[] NO_WAY = {0, 0, 0};
@@ -87,6 +97,16 @@ final class BlockPlacer implements BlockAccess {
      */
     CompletableFuture<Void> prepareFlight(List<Platform> platforms, int[] way, int distance, boolean tints,
                                           boolean environments) {
+        return prepareFlight(platforms, null, way, distance, tints, environments);
+    }
+
+    /**
+     * Like {@link #prepareFlight(List, int[], int, boolean, boolean)}; with neighbours (the other islands
+     * around) the columns around each island get its colour too ({@link TintMargins}), so it looks the
+     * same once solid as while flying.
+     */
+    CompletableFuture<Void> prepareFlight(List<Platform> platforms, Collection<Platform> neighbours, int[] way,
+                                          int distance, boolean tints, boolean environments) {
         List<int[]> positions = new ArrayList<>();
         for (Platform p : platforms) {
             for (Placement pl : p.blocks()) {
@@ -97,7 +117,7 @@ final class BlockPlacer implements BlockAccess {
                         pl.z() + way[2] * distance});
             }
         }
-        return load(positions).thenRun(() -> applyAreas(platforms, tints, environments, way, distance));
+        return load(positions).thenRun(() -> applyAreas(platforms, neighbours, tints, environments, way, distance));
     }
 
     /** Loads the sections of these positions; completes on the world thread. */
@@ -124,12 +144,13 @@ final class BlockPlacer implements BlockAccess {
     }
 
     /** Area colour (also along a flight way of distance blocks) and environment of the islands. */
-    private void applyAreas(List<Platform> platforms, boolean tints, boolean environments, int[] way, int distance) {
+    private void applyAreas(List<Platform> platforms, Collection<Platform> neighbours, boolean tints,
+                            boolean environments, int[] way, int distance) {
         Set<Long> tintChunks = new HashSet<>();
         Set<Long> envSections = new HashSet<>();
         for (Platform p : platforms) {
             try {
-                applyArea(p, tints, environments, way, distance, tintChunks, envSections);
+                applyArea(p, neighbours, tints, environments, way, distance, tintChunks, envSections);
             } catch (RuntimeException e) {
                 if (!warnedArea) {
                     warnedArea = true;
@@ -145,8 +166,8 @@ final class BlockPlacer implements BlockAccess {
         }
     }
 
-    private void applyArea(Platform p, boolean tints, boolean environments, int[] way, int distance,
-                           Set<Long> tintChunks, Set<Long> envSections) {
+    private void applyArea(Platform p, Collection<Platform> neighbours, boolean tints, boolean environments,
+                           int[] way, int distance, Set<Long> tintChunks, Set<Long> envSections) {
         ChunkStore cs = world.getChunkStore();
         Store<ChunkStore> store = cs.getStore();
         if (tints) {
@@ -161,6 +182,10 @@ final class BlockPlacer implements BlockAccess {
                     int z = pl.z() + way[2] * s;
                     columns.add(((long) x << 32) | (z & 0xFFFFFFFFL));
                 }
+            }
+            if (neighbours != null) {
+                // Solid grass blends with the columns around it; a flying island has one plain colour.
+                columns.addAll(marginColumns(p, neighbours));
             }
             for (long column : columns) {
                 int x = (int) (column >> 32);
@@ -198,6 +223,26 @@ final class BlockPlacer implements BlockAccess {
                 }
             }
         }
+    }
+
+    /** The island's columns and those around it that get its colour ({@link TintMargins}). */
+    static Set<Long> marginColumns(Platform p, Collection<Platform> neighbours) {
+        Set<Long> own = new HashSet<>();
+        for (Placement pl : p.blocks()) {
+            own.add(TintMargins.pack(pl.x(), pl.z()));
+        }
+        List<Set<Long>> others = new ArrayList<>();
+        for (Platform q : neighbours) {
+            if (q == p || q.tint() == p.tint()) {
+                continue;
+            }
+            Set<Long> qc = new HashSet<>();
+            for (Placement pl : q.blocks()) {
+                qc.add(TintMargins.pack(pl.x(), pl.z()));
+            }
+            others.add(qc);
+        }
+        return TintMargins.columns(own, others, TintMargins.RADIUS);
     }
 
     int environmentId(String name) {

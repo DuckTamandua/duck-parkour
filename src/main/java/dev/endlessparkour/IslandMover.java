@@ -166,6 +166,8 @@ final class IslandMover {
         long askedAt;
         /** True when its colours came too late and the island flew without objects. */
         boolean coloursLate;
+        /** No object of this island is made before this time. */
+        long makeFrom = Long.MIN_VALUE / 2;
 
         // What the owner's game got of the objects (the watch, for the log; it changes nothing).
         /** Per object: 0 never sent to the owner's game, 1 sent, 2 taken back. */
@@ -454,6 +456,14 @@ final class IslandMover {
         byPlatform.put(p, f);
     }
 
+    /** No object of this (arriving) island is made before this time (the world around a new player wakes up late). */
+    void notBefore(Platform p, long time) {
+        Flight f = byPlatform.get(p);
+        if (f != null && f.in) {
+            f.makeFrom = time;
+        }
+    }
+
     /** The colours of this island and its way in are set and sent to the players' games. */
     void coloursReady(Platform p) {
         Flight f = byPlatform.get(p);
@@ -732,7 +742,7 @@ final class IslandMover {
             }
             switch (f.state) {
                 case WAITING -> {
-                    if (now >= f.start - (f.in ? HIDE_MS : 0)) {
+                    if (now >= Math.max(f.start - (f.in ? HIDE_MS : 0), f.makeFrom)) {
                         if (f.in && !(f.coloursReady && now >= f.coloursAt + COLOUR_MARGIN_MS)) {
                             // Its colours are not in the games yet: objects made now would keep the old colour.
                             if (now > f.start - SETTLE_MS) {

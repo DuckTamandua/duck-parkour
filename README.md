@@ -1,4 +1,4 @@
-# «Duck» Parkour (Hytale server plugin) 1.3.5
+# «Duck» Parkour (Hytale server plugin) 1.3.6
 
 Plugin id and files keep the old name `EndlessParkour` (jar, data folder `EndlessParkour_EndlessParkour`), so the config and top list stay.
 

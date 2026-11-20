@@ -10,7 +10,7 @@ changing behaviour; most things are already config switches (see "Adapting").
 
 ## What it is
 
-An endless, procedurally generated jump course in the sky (version 1.3.5, built for the Hytale server
+An endless, procedurally generated jump course in the sky (version 1.3.6, built for the Hytale server
 0.7.7, Java 25). Every run starts on a start island in the green "Drifting Plains" and goes on forever
 through 18 areas modelled on Orbis (vanilla names, blocks, plants, grass colours, trees, weather,
 music). Falling ends the run; the next run is a brand-new course. A shared top list keeps everyone's best.
@@ -44,6 +44,8 @@ music). Falling ends the run; the next run is a brand-new course. A shared top l
   - `IslandMoverTest`: island flights in a pretend world (whole runs, falls mid-flight, foreign blocks,
     chunks loading late, very fast players, objects never shown untimely, the three plant styles, flights
     planned ahead, a stalled server, and a player's game modelled on Hytale's tracker and its LOD rule).
+  - `TintMarginsTest`: the grass colour rim around islands on real courses (every column next to an
+    island has its colour unless another area is as near, no column gets two colours).
   - `LeaderboardTest`: ranks, records, saving.
 - Install: copy the jar into the server's `mods` folder, restart. Config and top list are created in
   `mods/EndlessParkour_EndlessParkour/` (`config.json`, `leaderboard.json`).
@@ -145,6 +147,10 @@ flying island is therefore a set of **block entities** (`BlockEntity` component 
   them at once and islands flew in the old colour, changing it on landing; before 1.3.1 this was hidden
   because the game rebuilt every object mid-flight (the LOD problem). Colours that come too late: the
   island lands without flying. Flights are planned 500 ms ahead to leave room for this.
+  Solid grass blends its colour with the columns around it, a flying object has one plain colour: so the
+  columns up to 4 around each island get its colour too (`TintMargins`, `BlockPlacer.marginColumns`),
+  except where an island of another colour is as near (each column goes to its nearest island). Without
+  that rim, islands changed their look at the edges the moment they became solid (owner's report).
   Keep sending the chunk colours (`updateChunkTints`) for every flight, even when they look unchanged: an
   experiment sent them only on real changes, and the players' games then kept stale colours (flying
   islands showed the wrong colour until a later update). Most of these updates are real changes anyway

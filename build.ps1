@@ -56,7 +56,7 @@ if (-not $SkipTests) {
     [IO.File]::WriteAllLines($testList, $tests)
     & $javac --release 25 -encoding UTF-8 -cp "$classes;$ServerJar" -d $testClasses "@$testList"
     if ($LASTEXITCODE -ne 0) { throw 'javac (tests) failed' }
-    foreach ($test in 'dev.endlessparkour.course.GeneratorTest', 'dev.endlessparkour.LeaderboardTest', 'dev.endlessparkour.IslandMoverTest') {
+    foreach ($test in 'dev.endlessparkour.course.GeneratorTest', 'dev.endlessparkour.LeaderboardTest', 'dev.endlessparkour.IslandMoverTest', 'dev.endlessparkour.TintMarginsTest') {
         & $java -cp "$testClasses;$classes;$ServerJar" $test 2>&1 | Out-Host
         if ($LASTEXITCODE -ne 0) { throw "$test failed" }
     }
