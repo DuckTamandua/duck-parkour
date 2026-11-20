@@ -139,6 +139,10 @@ flying island is therefore a set of **block entities** (`BlockEntity` component 
   later. Tests show 0 cases of islands flying through each other.
 - **Grass colour**: the block entity packet only carries block id + scale; the client tints grass by the
   column the object is in. So the whole flight way is tinted in the area colour first (`prepareFlight`).
+  Keep sending the chunk colours (`updateChunkTints`) for every flight, even when they look unchanged: an
+  experiment sent them only on real changes, and the players' games then kept stale colours (flying
+  islands showed the wrong colour until a later update). Most of these updates are real changes anyway
+  (new columns ahead of the player).
 - **Plants**: the client draws moving objects plainer than blocks, plants and leaves most of all. Styles:
   `grow` (tiny, they grow in the second half of the flight), `fly` (full size), `land` (no plant objects,
   they appear on landing). In every style plants become blocks in the same moment as the island
@@ -212,6 +216,16 @@ flying island is therefore a set of **block entities** (`BlockEntity` component 
 - Several players at once: lanes and flights are per player, but the plugin was only played by one person.
   Watch entity counts and tick times with more players (`parkour selftest --fly=true` prints timings).
 - Block objects look plainer than blocks while flying (client side); plants are the most visible case.
+- **A rare flicker of islands in the distance is unsolved.** The owner still sees it now and then, more
+  often when the game lags. Ruled out so far:
+  - Objects reaching the game twice: that was real and is fixed in 1.3.1; the flight watch in the log
+    shows every object in the game before its flight and none lost or sent again.
+  - The jump of the objects from their hiding place at the bottom of the world to the start of their
+    way: an experiment that made them wait tiny right at the start (no jump at all, and 500 ms instead of
+    250 ms overlap at landing and take-off) did not help.
+  - The repeated colour updates: sending only real changes did not help and left stale colours.
+  The server showed no lag at those moments, so the cause is probably on the client side. A short screen
+  recording of the moment would be the best next clue.
 - The lobby mode (`ParkourOnly=false`) was not re-tested in game after version 1.2.
 - Config keys are written into `config.json` at start; changed defaults only reach an existing server
   after editing or deleting those keys there.
