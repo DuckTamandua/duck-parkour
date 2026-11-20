@@ -1,5 +1,6 @@
 package dev.endlessparkour;
 
+import com.hypixel.hytale.server.core.modules.entity.tracker.EntityTrackerSystems;
 import dev.endlessparkour.course.CourseGenerator;
 import dev.endlessparkour.course.Placement;
 import dev.endlessparkour.course.Platform;
@@ -8,6 +9,7 @@ import dev.endlessparkour.course.Tier;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -15,6 +17,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Predicate;
 
 /**
  * Checks the gliding islands in a pretend world: whole runs with islands flying in and out as
@@ -98,6 +101,43 @@ public final class IslandMoverTest {
         /** False when plants must not become objects (style LAND). */
         boolean plantsFly = true;
 
+        // A pretend player's game, as Hytale's tracker fills it: objects up to 512 blocks away whose box
+        // (boxSize, scaled with the object, but only from the object's second tick on) is at least
+        // lodRatio x distance² thick. Off while viewer is null.
+        double[] viewer;
+        double boxSize = 1;
+        double lodRatio = EntityTrackerSystems.LODCull.ENTITY_LOD_RATIO_DEFAULT;
+        final Set<Integer> sent = new HashSet<>();
+        final Map<Integer, Integer> ticksSeen = new HashMap<>();
+
+        /** The tracker at the end of the tick: what the player's game has now. */
+        void track() {
+            if (viewer == null) {
+                return;
+            }
+            sent.clear();
+            for (Map.Entry<Integer, double[]> e : live.entrySet()) {
+                int age = ticksSeen.merge(e.getKey(), 1, Integer::sum);
+                double[] o = e.getValue();
+                double scale = age == 1 ? 1.0 : o[3];
+                double dx = o[0] - viewer[0];
+                double dy = o[1] - viewer[1];
+                double dz = o[2] - viewer[2];
+                double d2 = dx * dx + dy * dy + dz * dz;
+                if (d2 <= 512.0 * 512.0 && boxSize * scale >= lodRatio * d2) {
+                    sent.add(e.getKey());
+                }
+            }
+        }
+
+        @Override
+        public Predicate<Object> sentTo(UUID player) {
+            if (viewer == null) {
+                return null;
+            }
+            return h -> sent.contains((Integer) h);
+        }
+
         @Override
         public Object spawn(Placement b, double x, double y, double z, float scale, long lifetimeMs) {
             if (b.decor() && !plantsFly) {
@@ -133,6 +173,8 @@ public final class IslandMoverTest {
             if (live.remove((Integer) handle) == null) {
                 throw new IllegalStateException("removed an object twice");
             }
+            ticksSeen.remove((Integer) handle);
+            sent.remove((Integer) handle);
             removedThisTick++;
         }
     }
@@ -156,6 +198,7 @@ public final class IslandMoverTest {
             objects.madeThisTick = 0;
             objects.removedThisTick = 0;
             mover.tick(now);
+            objects.track();
             while (!tasks.isEmpty()) {
                 tasks.poll().run();
             }
@@ -176,6 +219,10 @@ public final class IslandMoverTest {
         foreignBlocks();
         lateChunks();
         fastPlayer();
+        plannedAhead();
+        stalledServer();
+        sendBox();
+        staysInGame();
         if (failures > 0) {
             System.out.println("FAILED: " + failures);
             System.exit(1);
@@ -298,7 +345,7 @@ public final class IslandMoverTest {
     private static void overlapAtLanding() {
         Sim sim = new Sim();
         Platform p = biggest(course(21, 40));
-        sim.mover.flyIn(OWNER, p, AHEAD, DISTANCE, 0, MILLIS, GROW);
+        sim.mover.flyIn(OWNER, p, AHEAD, DISTANCE, 2 * IslandMover.HIDE_MS, MILLIS, GROW);
         boolean together = false;
         boolean blocksBeforeObjectsGo = true;
         boolean fullWhenBlocksCame = false;
@@ -598,7 +645,7 @@ public final class IslandMoverTest {
         sim.world.put(list.get(0));
         sim.world.put(list.get(1));
         for (int i = 2; i < 10; i++) {
-            sim.mover.flyIn(OWNER, list.get(i), AHEAD, DISTANCE, 0, MILLIS, GROW);
+            sim.mover.flyIn(OWNER, list.get(i), AHEAD, DISTANCE, IslandMover.HIDE_MS + 150L * (i - 2), MILLIS, GROW);
         }
         sim.mover.flyOut(OWNER, list.get(0), DISTANCE, 300, MILLIS, GROW);
         for (int i = 0; i < 6; i++) {
@@ -633,7 +680,7 @@ public final class IslandMoverTest {
         }
         check(sim.objects.live.isEmpty() && sim.world.blocks.isEmpty(), "a cancelled take-off makes nothing");
 
-        long t0 = sim.now;
+        long t0 = sim.now + IslandMover.HIDE_MS;
         sim.mover.flyIn(OWNER, list.get(3), AHEAD, DISTANCE, t0, MILLIS, GROW);
         for (int i = 0; i < 10; i++) {
             sim.tick(); // take-off, a batch of objects per tick
@@ -657,8 +704,9 @@ public final class IslandMoverTest {
         long k = RunManager.pack(first.x(), first.y(), first.z());
         sim.world.blocks.put(k, "FOREIGN");
         IslandMover.Plan plan = sim.mover.chooseWay(p, List.of(), DISTANCE, 0, MILLIS);
-        check(plan.way()[0] == 1 && plan.start() == 0, "nothing in the way: the island comes from ahead at once");
-        sim.mover.flyIn(OWNER, p, AHEAD, DISTANCE, 0, MILLIS, GROW);
+        check(plan.way()[0] == 1 && plan.start() == IslandMover.HIDE_MS,
+                "nothing in the way: the island comes from ahead as soon as it can");
+        sim.mover.flyIn(OWNER, p, AHEAD, DISTANCE, plan.start(), MILLIS, GROW);
         for (int i = 0; i < 80; i++) {
             sim.tick();
         }
@@ -675,7 +723,7 @@ public final class IslandMoverTest {
         for (Placement b : p.blocks()) {
             sim.world.unloaded.add(RunManager.pack(b.x(), b.y(), b.z()));
         }
-        sim.mover.flyIn(OWNER, p, AHEAD, DISTANCE, 0, MILLIS, GROW);
+        sim.mover.flyIn(OWNER, p, AHEAD, DISTANCE, IslandMover.HIDE_MS, MILLIS, GROW);
         for (int i = 0; i < 80; i++) {
             sim.tick();
         }
@@ -687,7 +735,7 @@ public final class IslandMoverTest {
     private static void fastPlayer() {
         Sim sim = new Sim();
         Platform p = course(11, 3).get(2);
-        sim.mover.flyIn(OWNER, p, AHEAD, DISTANCE, 0, MILLIS, GROW);
+        sim.mover.flyIn(OWNER, p, AHEAD, DISTANCE, IslandMover.HIDE_MS, MILLIS, GROW);
         for (int i = 0; i < 10; i++) {
             sim.tick();
         }
@@ -697,6 +745,131 @@ public final class IslandMoverTest {
         }
         check(sim.world.blocks.isEmpty() && sim.objects.live.isEmpty() && sim.mover.active() == 0,
                 "nothing left of an island taken away mid-flight");
+    }
+
+    /** A flight asked for "now" is planned HIDE_MS ahead, so all objects are made well before it starts. */
+    private static void plannedAhead() {
+        Sim sim = new Sim();
+        sim.now = 5000;
+        Platform p = biggest(course(31, 40));
+        IslandMover.Plan plan = sim.mover.chooseWay(p, List.of(), DISTANCE, sim.now, MILLIS);
+        check(plan.start() >= sim.now + IslandMover.HIDE_MS, "a flight asked for now starts " + IslandMover.HIDE_MS
+                + " ms later at the earliest (" + (plan.start() - sim.now) + " ms)");
+        sim.mover.flyIn(OWNER, p, plan.way(), DISTANCE, plan.start(), MILLIS, GROW);
+        long lastMade = -1;
+        for (int i = 0; i < 80; i++) {
+            int before = sim.objects.next;
+            sim.tick();
+            if (sim.objects.next > before) {
+                lastMade = sim.now;
+            }
+        }
+        check(sim.objects.next == p.blocks().size(), "every block of a big island flew (" + sim.objects.next + " of "
+                + p.blocks().size() + ")");
+        check(lastMade >= 0 && lastMade <= plan.start() - IslandMover.SETTLE_MS, "all objects made at least "
+                + IslandMover.SETTLE_MS + " ms before the flight (the last " + (plan.start() - lastMade) + " ms before)");
+        check(sim.world.blocks.equals(expected(List.of(p))) && sim.objects.live.isEmpty(), "landed whole");
+    }
+
+    /**
+     * The server stalls until the flight has started: objects that could not be made in time never pop
+     * up during the flight; the island still lands whole and on time.
+     */
+    private static void stalledServer() {
+        Sim sim = new Sim();
+        Platform p = biggest(course(32, 40));
+        long start = IslandMover.HIDE_MS;
+        sim.mover.flyIn(OWNER, p, AHEAD, DISTANCE, start, MILLIS, GROW);
+        while (sim.now < start + 2 * TICK) {
+            sim.now += TICK;
+            sim.mover.tick(sim.now); // the world tasks wait
+        }
+        boolean poppedUp = false;
+        long landedAt = -1;
+        for (int i = 0; i < 80; i++) {
+            Set<Integer> before = new HashSet<>(sim.objects.live.keySet());
+            sim.tick();
+            for (Map.Entry<Integer, double[]> e : sim.objects.live.entrySet()) {
+                if (!before.contains(e.getKey()) && sim.now >= start) {
+                    poppedUp = true;
+                }
+            }
+            if (landedAt < 0 && sim.world.blocks.size() == p.blocks().size()) {
+                landedAt = sim.now;
+            }
+        }
+        check(!poppedUp, "no object appears once the flight has started");
+        check(sim.mover.watchTotals()[4] == p.blocks().size(), "objects made too late do not fly ("
+                + sim.mover.watchTotals()[4] + " of " + p.blocks().size() + ")");
+        check(landedAt >= start + MILLIS && landedAt <= start + MILLIS + 2 * TICK,
+                "the island still lands whole and on time (" + landedAt + " ms)");
+        check(sim.world.blocks.equals(expected(List.of(p))) && sim.objects.live.isEmpty() && sim.mover.active() == 0,
+                "nothing left over");
+    }
+
+    /** The box of flying objects keeps them in the game at any size from MIN_SCALE up, up to SEND_RANGE away. */
+    private static void sendBox() {
+        double ratio = EntityTrackerSystems.LODCull.ENTITY_LOD_RATIO_DEFAULT;
+        double box = EntityBlocks.sendBoxSize(ratio, EntityBlocks.SEND_RANGE, IslandMover.MIN_SCALE);
+        boolean all = true;
+        for (double s = IslandMover.MIN_SCALE; s <= 1.0001; s += 0.01) {
+            for (double d = 0; d <= EntityBlocks.SEND_RANGE; d += 1) {
+                all &= box * s >= ratio * d * d;
+            }
+        }
+        check(all, "with a box of " + Math.round(box) + " objects stay in the game up to " + EntityBlocks.SEND_RANGE
+                + " blocks away at any size");
+        check(IslandMover.MIN_SCALE < ratio * 40 * 40, "with a block's own box a tiny object 40 blocks away would drop out");
+        check(box >= 1 && box <= 1000, "the box stays a sane size (" + box + ")");
+    }
+
+    /**
+     * The players' games, modelled on Hytale's tracker: with the box of flying objects every object reaches
+     * the game while it still waits out of sight and stays there until it has landed. With a block's own
+     * box the game loses the objects at the start of the flight and gets them again in the middle of it.
+     */
+    private static void staysInGame() {
+        double box = EntityBlocks.sendBoxSize(EntityTrackerSystems.LODCull.ENTITY_LOD_RATIO_DEFAULT,
+                EntityBlocks.SEND_RANGE, IslandMover.MIN_SCALE);
+        long[] old = watchedRun(1.0);
+        long[] now = watchedRun(box);
+        check(old[0] > 0 && old[3] > 0 && old[2] > 0, "the watch sees a block box lose objects at the start and get them "
+                + "again mid-flight (odd flights, lost, shown again, late, not in time, early: " + Arrays.toString(old) + ")");
+        check(now[0] == 0 && now[1] == 0 && now[2] == 0 && now[3] == 0 && now[4] == 0 && now[5] > 0,
+                "with the flying box every object is in the game before its flight and stays (" + Arrays.toString(now) + ")");
+        System.out.printf("Players' games (modelled): block box %s, flying box %s (odd flights, lost, shown again, "
+                + "late, not in time, early)%n", Arrays.toString(old), Arrays.toString(now));
+    }
+
+    /** A player stands on island 3 while the next eight islands fly in; returns the watch totals. */
+    private static long[] watchedRun(double boxSize) {
+        Sim sim = new Sim();
+        sim.objects.boxSize = boxSize;
+        List<Platform> list = course(41, 14);
+        Placement top = list.get(3).blocks().get(0);
+        for (Placement b : list.get(3).blocks()) {
+            if (!b.decor() && b.y() > top.y()) {
+                top = b;
+            }
+        }
+        sim.objects.viewer = new double[] {top.x() + 0.5, top.y() + 1.0, top.z() + 0.5};
+        List<Platform> run = new ArrayList<>(list.subList(0, 4));
+        for (Platform p : run) {
+            sim.world.put(p);
+        }
+        long start = sim.now;
+        for (int i = 4; i < 12; i++) {
+            Platform p = list.get(i);
+            run.add(p);
+            IslandMover.Plan plan = sim.mover.chooseWay(p, run, DISTANCE, start, MILLIS);
+            sim.mover.flyIn(OWNER, p, plan.way(), DISTANCE, plan.start(), MILLIS, GROW);
+            start = plan.start() + 150;
+        }
+        for (int i = 0; i < 300 && sim.mover.active() > 0; i++) {
+            sim.tick();
+        }
+        check(sim.mover.active() == 0 && sim.world.blocks.equals(expected(run)), "watched flights landed whole");
+        return sim.mover.watchTotals();
     }
 
     private static List<Platform> course(long seed, int length) {

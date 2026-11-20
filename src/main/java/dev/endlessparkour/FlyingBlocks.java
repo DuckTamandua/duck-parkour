@@ -2,8 +2,19 @@ package dev.endlessparkour;
 
 import dev.endlessparkour.course.Placement;
 
+import java.util.UUID;
+import java.util.function.Predicate;
+
 /** Moving block objects for island flights (block entities in the game, a map in the tests). */
 interface FlyingBlocks {
+
+    /**
+     * Tells which objects the game of this player has right now (the server sent them and has not taken
+     * them back), or null when that cannot be known (player not here). Valid for the current tick only.
+     */
+    default Predicate<Object> sentTo(UUID player) {
+        return null;
+    }
 
     /**
      * Shows the block of b as an object centred at (x, y, z) at this size (1 = a full block); returns a

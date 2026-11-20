@@ -10,7 +10,7 @@ changing behaviour; most things are already config switches (see "Adapting").
 
 ## What it is
 
-An endless, procedurally generated jump course in the sky (version 1.3.0, built for the Hytale server
+An endless, procedurally generated jump course in the sky (version 1.3.1, built for the Hytale server
 0.7.7, Java 25). Every run starts on a start island in the green "Drifting Plains" and goes on forever
 through 18 areas modelled on Orbis (vanilla names, blocks, plants, grass colours, trees, weather,
 music). Falling ends the run; the next run is a brand-new course. A shared top list keeps everyone's best.
@@ -42,7 +42,8 @@ music). Falling ends the run; the next run is a brand-new course. A shared top l
     area order random after the start, area lengths, harder levels clearly harder, decoration islands
     equally often in every level, safety platform never overlaps.
   - `IslandMoverTest`: island flights in a pretend world (whole runs, falls mid-flight, foreign blocks,
-    chunks loading late, very fast players, objects never shown untimely, the three plant styles).
+    chunks loading late, very fast players, objects never shown untimely, the three plant styles, flights
+    planned ahead, a stalled server, and a player's game modelled on Hytale's tracker and its LOD rule).
   - `LeaderboardTest`: ranks, records, saving.
 - Install: copy the jar into the server's `mods` folder, restart. Config and top list are created in
   `mods/EndlessParkour_EndlessParkour/` (`config.json`, `leaderboard.json`).
@@ -102,19 +103,35 @@ music). Falling ends the run; the next run is a brand-new course. A shared top l
 
 Blocks can only stand on whole positions and appear instantly, so an island cannot glide as blocks. A
 flying island is therefore a set of **block entities** (`BlockEntity` component + `TransformComponent` +
-`EntityScaleComponent` + `Intangible` + `DespawnComponent`, deliberately **no `Velocity`**, so no gravity
-or physics) moved every world tick, then swapped for real blocks.
+`EntityScaleComponent` + our own `BoundingBox` + `Intangible` + `DespawnComponent`, deliberately **no
+`Velocity`**, so no gravity or physics) moved every world tick, then swapped for real blocks.
 
 - **Every world tick** (worlds run at 30 TPS): `FlightTicker` is an ECS `TickingSystem`. A 20 Hz
   scheduler was tried first and stuttered (updates landed 33/66 ms apart).
 - **Structural changes never inside a system tick**: adding/removing entities or blocks happens in world
   tasks (`world.execute`); the store throws "Store is currently processing" otherwise. Moving and
   resizing (component mutation) is done in the tick.
-- **Arriving**: objects are made a batch per tick (64), far below at y=1.5, tiny, 200 ms before the
-  flight, then moved to the start of the way (otherwise players saw full-size islands flash up). They
-  glide in (ease-out) and grow. On landing the real blocks are placed while the objects still cover them
-  at full size for 120 ms (the client needs a few frames to draw new blocks, else it flickers), then the
-  objects slip inside (scale 0.98) and are removed at 250 ms.
+- **Arriving**: objects are made a batch per tick (128; 64 take about 1 ms), far below at y=1.5, tiny,
+  300 ms before the flight (`HIDE_MS`; `chooseWay` never plans a flight sooner), so the players' games get
+  them out of sight; at the start they move up to the start of the way. Objects not made at least 150 ms
+  before the start (`SETTLE_MS`, a stalled server) do not fly: their blocks just appear on landing, as
+  popping up mid-flight would show. Islands glide in (ease-out) and grow. On landing the real blocks are
+  placed while the objects still cover them at full size for 120 ms (the client needs a few frames to
+  draw new blocks, else it flickers), then the objects slip inside (scale 0.98) and are removed at 250 ms.
+- **What a player's game gets (Hytale's "LOD cull")**: the tracker sends an entity only within the view
+  radius and only while its box is at least `EntityTrackerSystems.LODCull.ENTITY_LOD_RATIO` (3.5e-5) x
+  distance² thick. A block entity's box is its block hitbox, scaled with the entity every tick by
+  `EntityScaleBoundingBoxSystem`, but not yet in the entity's first tick. With the block's own box a 5 %
+  object more than ~38 blocks away reached the game in its first tick, was taken back in the next and was
+  sent again mid-flight: the game built every island twice (players saw rare flashes in the distance,
+  fixed in 1.3.1). So flying objects get their own big box (`EntityBlocks.sendBoxSize`, ~69 blocks,
+  computed from the ratio for 256 blocks at scale 0.05). It only decides what is sent: collisions, aiming
+  and NPC searches ignore intangible entities (`EntitySpatialSystem` and `TangiableEntitySpatialSystem`
+  exclude `Intangible`).
+- **Flight watch (log)**: every tick `IslandMover` checks which objects the owner's game has (the
+  tracker's `EntityViewer.sent`) and logs `Flight watch: 100 arrivals, ...` every 100 arrivals, plus a
+  line for an odd flight (at most every 10 s). Healthy: every object "in the game out of sight before
+  its flight", 0 reached it during the flight, 0 lost, 0 shown again, 0 not made in time.
 - **Leaving**: objects appear inside the blocks first, then the blocks go, the objects glide away (-X)
   and shrink.
 - **Ways in**: from ahead (+X) when free, else from below, above or the sides; `chooseWay` checks the
@@ -130,7 +147,7 @@ or physics) moved every world tick, then swapped for real blocks.
   game puts the entity into the chunk, where it pops up later. The mover then flies that island without
   objects (it just stands at its place on time) and logs "Flying objects could not be made". Every object
   also gets a despawn timer (flight time + 5 s) as a safety net.
-- Load: flight bookkeeping ~0.05 ms per tick; up to ~900 objects at a run start with `grow`/`fly` (6
+- Load: flight bookkeeping ~0.05 ms per tick; up to ~1000 objects at a run start with `grow`/`fly` (6
   islands at once), ~120 per platform step. **Only tested with one player at a time.**
 
 ## Hytale 0.7.7 facts found the hard way
@@ -154,6 +171,9 @@ or physics) moved every world tick, then swapped for real blocks.
 - A plugin whose `setup()` throws **stops the whole server** (exit code 9). ECS systems are keyed by
   class: register one class per system (that is why `Protection` has three subclasses).
 - World ticks: 30 TPS; `world.execute` tasks run between ticks.
+- Entity visibility: within the player's view radius (`player viewradius get --player=<name>` in the
+  console; 16 chunks = 512 blocks on the test server) and passing the LOD rule above; what a player's game
+  has right now is `EntityTrackerSystems.EntityViewer.sent` on the player.
 - **Fonts**: the UI font (NunitoSans atlas) shows "?" for many symbols (e.g. ʚ ɞ ★ ♥) and has no
   fallback. Safe decorations: « » · ~ ° ¤ § and Cyrillic letters (є з Є З Э …); the bold title font
   (Lexend) has no Cyrillic.

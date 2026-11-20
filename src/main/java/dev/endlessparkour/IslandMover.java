@@ -15,6 +15,7 @@ import java.util.UUID;
 import java.util.concurrent.Executor;
 import java.util.function.Consumer;
 import java.util.function.LongSupplier;
+import java.util.function.Predicate;
 
 /**
  * Lets islands glide in and away smoothly. A flying island is a set of block objects
@@ -45,16 +46,23 @@ final class IslandMover {
     static final long OVERLAP_MS = 250;
     /** Within that time, how long the objects keep full size next to the new blocks (until the game drew them). */
     static final long COVER_MS = 120;
-    /** Objects made or removed per flight and tick. */
-    static final int BATCH = 64;
+    /** Objects made or removed per flight and tick (making 64 takes about a millisecond). */
+    static final int BATCH = 128;
     /** An object left behind by accident vanishes by itself this long after its flight should be over. */
     static final long SPARE_LIFETIME_MS = 5000;
     /**
      * Arriving objects are made this long before their flight, far below at {@link #HIDDEN_Y} and tiny,
-     * and only come up when the flight starts: whatever the game shows of a brand-new object in its
-     * first moments happens out of sight.
+     * and only come up when the flight starts: the players' games get them out of sight, and whatever a
+     * game shows of a brand-new object in its first moments happens there. Flights are always planned at
+     * least this far ahead ({@link #chooseWay}).
      */
-    static final long HIDE_MS = 200;
+    static final long HIDE_MS = 300;
+    /**
+     * Objects that could not be made at least this long before their flight (a stalled server) do not
+     * fly: popping up in the middle of the flight would show. Their blocks simply appear when the
+     * island lands.
+     */
+    static final long SETTLE_MS = 150;
     /** Height where arriving objects are made (the bottom of the world, far below every course). */
     static final double HIDDEN_Y = 1.5;
 
@@ -139,6 +147,27 @@ final class IslandMover {
         int made;
         /** Objects that exist right now. */
         int alive;
+        /** The time the objects were last moved to. */
+        long movedAt;
+
+        /** Objects that were not made in time and do not fly (their blocks appear at landing). */
+        int notInTime;
+
+        // What the owner's game got of the objects (the watch, for the log; it changes nothing).
+        /** Per object: 0 never sent to the owner's game, 1 sent, 2 taken back. */
+        final byte[] sent;
+        boolean watched;
+        /** Objects the game got while they still waited out of sight (arriving islands): the way it should be. */
+        int sentHidden;
+        /** Objects of an arriving island that flew, and those that were not in the game yet when it started. */
+        int flown;
+        int notSentAtStart;
+        /** Objects the game lost although they were still part of the flight, and objects it got again. */
+        int lost;
+        int resent;
+        /** When the first object reached the game during the flight (ms after its start, -1: never), and its size. */
+        long firstSentMs = -1;
+        float firstSentScale;
 
         Flight(UUID owner, Platform platform, boolean in, int[] dir, int distance, long start, long duration,
                PlantStyle style) {
@@ -159,6 +188,7 @@ final class IslandMover {
             this.solids = n;
             this.objectCount = style == PlantStyle.LAND ? n : blocks.size();
             this.objects = new Object[objectCount];
+            this.sent = new byte[objectCount];
         }
     }
 
@@ -181,6 +211,34 @@ final class IslandMover {
     private long notMade;
     private int live;
     private final long[] ways = new long[WAYS_IN.length + 1];
+
+    // The watch: what the players' games got of the objects, summed up in the log now and then.
+    /** Arriving islands per summary line. */
+    static final int WATCH_SUMMARY_EVERY = 100;
+    /** At most one line about a single odd flight this often (ms). */
+    static final long WATCH_NOTE_GAP_MS = 10_000;
+    private int watchFlights;
+    private long watchObjects;
+    private long watchReady;
+    private long watchLateSent;
+    private long watchFirstSentMs;
+    private int watchFirstSentCount;
+    private long watchFirstSentMaxMs;
+    private float watchFirstSentMaxScale;
+    private long watchLost;
+    private long watchResent;
+    private long watchNotInTime;
+    private int watchOdd;
+    private long lastOddNote = Long.MIN_VALUE / 2;
+    private long maxBatchNanos;
+    private int maxBatchCount;
+    /** Totals since the start (tests and the self test). */
+    private long oddFlightsTotal;
+    private long lostTotal;
+    private long resentTotal;
+    private long lateSentTotal;
+    private long notInTimeTotal;
+    private long sentHiddenTotal;
 
     /**
      * @param world    the blocks
@@ -206,9 +264,11 @@ final class IslandMover {
      * How an island that should fly from startAt for duration ms comes in: the first way of
      * {@link #WAYS_IN} (from ahead if it can) and the earliest of a few start times at which it
      * never meets another island, neither a standing one nor one flying or landing meanwhile.
-     * From ahead at startAt when nothing is clear.
+     * From ahead at startAt when nothing is clear. Never sooner than {@link #HIDE_MS} from now: the
+     * objects need that long to get into the players' games out of sight.
      */
     Plan chooseWay(Platform p, Iterable<Platform> others, int distance, long startAt, long duration) {
+        startAt = Math.max(startAt, clock.getAsLong() + HIDE_MS);
         Set<Long> standing = new HashSet<>();
         for (Platform o : others) {
             if (o == p || byPlatform.containsKey(o)) {
@@ -429,6 +489,141 @@ final class IslandMover {
         if (byPlatform.get(f.platform) == f) {
             byPlatform.remove(f.platform);
         }
+        if (f.watched) {
+            noteWatch(f);
+        }
+    }
+
+    // ------------------------------------------------------------------ the watch (log only)
+
+    /** Notes which objects the owners' games got or lost since the last tick. Changes nothing in the flights. */
+    private void watch() {
+        Map<UUID, Predicate<Object>> games = new HashMap<>();
+        for (Flight f : flights) {
+            Predicate<Object> has = games.computeIfAbsent(f.owner, objects::sentTo);
+            if (has == null) {
+                continue;
+            }
+            f.watched = true;
+            boolean hidden = f.in && (f.state == State.SPAWNING || f.state == State.READY);
+            // Leaving islands shrink and may leave the game's sight on their way: that is expected.
+            boolean keep = f.in ? f.state == State.FLYING || f.state == State.LINGERING : f.state == State.HOLDING;
+            for (int i = 0; i < f.made; i++) {
+                if (f.objects[i] == null) {
+                    continue;
+                }
+                boolean got = has.test(f.objects[i]);
+                byte was = f.sent[i];
+                if (got && was != 1) {
+                    if (was == 2) {
+                        f.resent++;
+                    }
+                    if (hidden) {
+                        f.sentHidden++;
+                    } else if (f.in && f.state == State.FLYING && f.firstSentMs < 0) {
+                        f.firstSentMs = Math.max(0, f.movedAt - f.moveStart);
+                        f.firstSentScale = i < f.solids ? scale(f, f.movedAt) : plantScale(f, f.movedAt);
+                    }
+                    f.sent[i] = 1;
+                } else if (!got && was == 1) {
+                    if (keep) {
+                        f.lost++;
+                    }
+                    f.sent[i] = 2;
+                }
+            }
+        }
+    }
+
+    /** At the start of an arriving island's flight: which of its objects are not in the owner's game yet. */
+    private void noteStart(Flight f) {
+        for (int i = 0; i < f.made; i++) {
+            if (f.objects[i] != null) {
+                f.flown++;
+                if (f.sent[i] != 1) {
+                    f.notSentAtStart++;
+                }
+            }
+        }
+    }
+
+    /** Adds a finished flight to the watch, logs it when something was odd, and now and then a summary. */
+    private void noteWatch(Flight f) {
+        boolean odd = f.notSentAtStart > 0 || f.lost > 0 || f.resent > 0 || f.notInTime > 0;
+        if (f.in) {
+            watchFlights++;
+            watchObjects += f.flown;
+            watchReady += f.flown - f.notSentAtStart;
+            watchLateSent += f.notSentAtStart;
+            if (f.firstSentMs >= 0) {
+                watchFirstSentMs += f.firstSentMs;
+                watchFirstSentCount++;
+                watchFirstSentMaxMs = Math.max(watchFirstSentMaxMs, f.firstSentMs);
+                watchFirstSentMaxScale = Math.max(watchFirstSentMaxScale, f.firstSentScale);
+            }
+        }
+        watchLost += f.lost;
+        watchResent += f.resent;
+        watchNotInTime += f.notInTime;
+        sentHiddenTotal += f.sentHidden;
+        lateSentTotal += f.notSentAtStart;
+        lostTotal += f.lost;
+        resentTotal += f.resent;
+        if (odd) {
+            watchOdd++;
+            oddFlightsTotal++;
+            long t = clock.getAsLong();
+            if (t - lastOddNote >= WATCH_NOTE_GAP_MS) {
+                lastOddNote = t;
+                notes.accept(String.format(Locale.ROOT, "Flight watch: island %d %s from %s, %d objects: %d reached the "
+                        + "game only after the start (first %d ms in, at size %.2f), %d lost and %d shown again during "
+                        + "the flight, %d not made in time", f.platform.index(), f.in ? "in" : "out", wayName(f.dir),
+                        f.objectCount, f.notSentAtStart, f.firstSentMs, f.firstSentScale, f.lost, f.resent, f.notInTime));
+            }
+        }
+        if (watchFlights >= WATCH_SUMMARY_EVERY) {
+            notes.accept(String.format(Locale.ROOT, "Flight watch: %d arrivals, %d objects: %d were in the game out of "
+                    + "sight before their flight, %d reached it only during the flight (latest %d ms in, largest size "
+                    + "then %.2f); %d lost during a flight, %d shown again; %d not made in time; %d flights with "
+                    + "something odd; slowest object batch %.1f ms (%d objects)", watchFlights, watchObjects, watchReady,
+                    watchLateSent, watchFirstSentMaxMs, watchFirstSentMaxScale, watchLost, watchResent, watchNotInTime,
+                    watchOdd, maxBatchNanos / 1e6, maxBatchCount));
+            watchFlights = 0;
+            watchObjects = 0;
+            watchReady = 0;
+            watchLateSent = 0;
+            watchFirstSentMs = 0;
+            watchFirstSentCount = 0;
+            watchFirstSentMaxMs = 0;
+            watchFirstSentMaxScale = 0;
+            watchLost = 0;
+            watchResent = 0;
+            watchNotInTime = 0;
+            watchOdd = 0;
+            maxBatchNanos = 0;
+            maxBatchCount = 0;
+        }
+    }
+
+    /** Watch totals since the start: odd flights, lost, shown again, late in the game, not in time, in the game while hidden. */
+    long[] watchTotals() {
+        return new long[] {oddFlightsTotal, lostTotal, resentTotal, lateSentTotal, notInTimeTotal, sentHiddenTotal};
+    }
+
+    private static String wayName(int[] d) {
+        if (d[0] > 0) {
+            return "ahead";
+        }
+        if (d[0] < 0) {
+            return "behind";
+        }
+        if (d[1] < 0) {
+            return "below";
+        }
+        if (d[1] > 0) {
+            return "above";
+        }
+        return "the side";
     }
 
     /** Adds the positions of blocks that belong to flights and stand (leaving islands before take-off). */
@@ -448,6 +643,8 @@ final class IslandMover {
             return;
         }
         long t0 = System.nanoTime();
+        // First, what the games got at the end of the last tick (states and objects are still as then).
+        watch();
         for (Flight f : new ArrayList<>(flights)) {
             if (f.busy) {
                 continue;
@@ -462,6 +659,9 @@ final class IslandMover {
                 case SPAWNING -> queue(f, () -> spawnBatch(f));
                 case READY -> {
                     if (now >= f.start) {
+                        if (f.watched) {
+                            noteStart(f);
+                        }
                         // Up from the hiding place to the start of the flight, tiny.
                         f.state = State.FLYING;
                         moveObjects(f, now);
@@ -521,8 +721,18 @@ final class IslandMover {
         if (f.state != State.SPAWNING) {
             return;
         }
+        if (f.in && clock.getAsLong() > f.start - SETTLE_MS) {
+            // Too late to get them into the games out of sight before the flight: the rest does not fly,
+            // those blocks simply appear when the island lands.
+            f.notInTime += f.objectCount - f.made;
+            notInTimeTotal += f.objectCount - f.made;
+            f.made = f.objectCount;
+            f.state = f.alive > 0 ? State.READY : State.FLYING;
+            return;
+        }
         long lifetime = HIDE_MS + f.duration + OVERLAP_MS + SPARE_LIFETIME_MS;
         int end = Math.min(f.objectCount, f.made + BATCH);
+        long t0 = System.nanoTime();
         for (int i = f.made; i < end; i++) {
             Placement b = f.blocks.get(i);
             Object o = f.in
@@ -541,6 +751,11 @@ final class IslandMover {
             f.objects[i] = o;
             f.alive++;
             live++;
+        }
+        long took = System.nanoTime() - t0;
+        if (took > maxBatchNanos) {
+            maxBatchNanos = took;
+            maxBatchCount = end - f.made;
         }
         f.made = end;
         if (f.made == f.objectCount) {
@@ -661,6 +876,7 @@ final class IslandMover {
     }
 
     private void moveObjects(Flight f, long now) {
+        f.movedAt = now;
         double off = offset(f, now);
         float scale = scale(f, now);
         float plants = plantScale(f, now);
