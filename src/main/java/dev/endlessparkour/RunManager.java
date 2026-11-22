@@ -15,6 +15,7 @@ import com.hypixel.hytale.server.core.asset.type.weather.config.Weather;
 import com.hypixel.hytale.server.core.Message;
 import com.hypixel.hytale.server.core.asset.type.soundevent.config.SoundEvent;
 import com.hypixel.hytale.server.core.entity.entities.Player;
+import com.hypixel.hytale.server.core.entity.movement.MovementStatesComponent;
 import com.hypixel.hytale.server.core.modules.entity.component.TransformComponent;
 import com.hypixel.hytale.server.core.modules.entity.teleport.Teleport;
 import com.hypixel.hytale.server.core.modules.entitystats.EntityStatMap;
@@ -29,6 +30,7 @@ import com.hypixel.hytale.server.core.universe.world.World;
 import com.hypixel.hytale.server.core.universe.world.storage.EntityStore;
 import com.hypixel.hytale.server.core.util.EventTitleUtil;
 import dev.endlessparkour.course.CourseGenerator;
+import dev.endlessparkour.course.Move;
 import dev.endlessparkour.course.Placement;
 import dev.endlessparkour.course.Platform;
 import dev.endlessparkour.course.Theme;
@@ -55,6 +57,18 @@ final class RunManager {
     private static final long WORLD_CHANGE_MS = 20000;
     private static final int SPAWN_MAX_TRIES = 4;
     private static final long LEAVE_GRACE_MS = 10000;
+    /** Faster than this (blocks/s, flat) a player is dashing: sprinting is 7. */
+    private static final double DASH_SPEED = 11.0;
+    /** Below this a dash is over. */
+    private static final double DASH_END_SPEED = 8.5;
+    /** Shorter speed-ups are not dashes but the jitter of position updates (a dash goes about 4 blocks). */
+    private static final double DASH_MIN_BLOCKS = 2.0;
+    /** Rising faster than this (blocks/s) is a bounce: a jump starts at 11.8 and slows down. */
+    private static final double BOUNCE_SPEED = 14.0;
+    /** Blocks between the end of a player's old course and the start island of their next run. */
+    private static final int RESTART_GAP = 24;
+    /** Runs move on along +X; past this the next one starts at 0 again. */
+    private static final int MAX_START_X = 1_000_000;
 
     /** Where a player came from, to send them back on /parkour leave. */
     record ReturnPoint(String world, double x, double y, double z, float pitch, float yaw, GameMode gameMode) {
@@ -76,6 +90,10 @@ final class RunManager {
     private final Map<String, Integer> weatherIds = new ConcurrentHashMap<>();
     /** How plants fly with each player's islands (set with /parkour plants). */
     private final Map<UUID, IslandMover.PlantStyle> plantStyles = new ConcurrentHashMap<>();
+    /** Special jumps each player got a hint for after failing at one (once per connection). */
+    private final Map<UUID, Set<Move>> hinted = new ConcurrentHashMap<>();
+    /** Players get the dash sword (switched on and its item known to the server). */
+    private final boolean sword;
     private final HudComponent[] hiddenHud;
     private volatile World world;
     private volatile BlockPlacer placer;
@@ -88,6 +106,7 @@ final class RunManager {
         this.log = log;
         this.themes = List.copyOf(themes);
         this.saveBoard = saveBoard;
+        this.sword = cfg.dashSword && DashSword.available();
         for (String s : new String[] {cfg.soundPoint, cfg.soundRecord, cfg.soundFail}) {
             checkSound(s);
         }
@@ -278,6 +297,8 @@ final class RunManager {
                 fillStamina(ref);
             }
             progress(run, pr, pos, now);
+            watchMoves(run, ref, pos, now);
+            watchDash(run, pos, now);
             if (fell(run, pos)) {
                 fail(run, pr, now);
                 continue;
@@ -287,6 +308,82 @@ final class RunManager {
                 refreshHud(run);
             }
         }
+    }
+
+    /**
+     * Logs every bounce (how high it went) and every pull-up at an edge (Hytale's mantling: how many blocks
+     * it lifted the player, and onto which platform), to check the course against what players really do.
+     */
+    private void watchMoves(Run run, Ref<EntityStore> ref, Vector3d pos, long now) {
+        if (run.lastAt > 0 && now > run.lastAt && now - run.lastAt < 300) {
+            double vy = (pos.y - run.lastY) / ((now - run.lastAt) / 1000.0);
+            if (!run.bouncing && vy > BOUNCE_SPEED) {
+                run.bouncing = true;
+                run.bounceFrom = run.lastY;
+                run.bounceTop = pos.y;
+            } else if (run.bouncing) {
+                run.bounceTop = Math.max(run.bounceTop, pos.y);
+                if (vy < 0) {
+                    run.bouncing = false;
+                    log.at(Level.INFO).log("Bounce of %s: rose %.1f blocks", run.playerName, run.bounceTop - run.bounceFrom);
+                }
+            }
+        } else {
+            run.bouncing = false;
+        }
+        MovementStatesComponent ms = ref.getStore().getComponent(ref, MovementStatesComponent.getComponentType());
+        boolean mantling = ms != null && ms.getMovementStates() != null && ms.getMovementStates().mantling;
+        if (mantling && !run.mantling) {
+            run.mantling = true;
+            run.mantleFrom = run.lastAt > 0 ? run.lastY : pos.y;
+        } else if (!mantling && run.mantling) {
+            run.mantling = false;
+            String onto = "no platform";
+            for (Platform p : run.platforms()) {
+                if (p.isStandingOn(pos.x, pos.y, pos.z)) {
+                    onto = "platform " + p.index() + " (" + p.move() + ")";
+                    break;
+                }
+            }
+            log.at(Level.INFO).log("Pull-up of %s: %+.1f blocks, onto %s", run.playerName, pos.y - run.mantleFrom, onto);
+        }
+    }
+
+    /**
+     * Logs every dash (horizontal speed over {@link #DASH_SPEED}): how far it went, how long it took and how
+     * much more that is than sprinting, so the dash gaps can be matched to what the dash really does.
+     */
+    private void watchDash(Run run, Vector3d pos, long now) {
+        if (run.lastAt > 0 && now > run.lastAt && now - run.lastAt < 300) {
+            double dt = (now - run.lastAt) / 1000.0;
+            double speed = Math.hypot(pos.x - run.lastX, pos.z - run.lastZ) / dt;
+            if (!run.dashing && speed > DASH_SPEED) {
+                run.dashing = true;
+                run.dashX = run.lastX;
+                run.dashY = run.lastY;
+                run.dashZ = run.lastZ;
+                run.dashAt = run.lastAt;
+                run.dashTop = speed;
+            } else if (run.dashing) {
+                run.dashTop = Math.max(run.dashTop, speed);
+                if (speed < DASH_END_SPEED) {
+                    run.dashing = false;
+                    double secs = (run.lastAt - run.dashAt) / 1000.0;
+                    double dist = Math.hypot(run.lastX - run.dashX, run.lastZ - run.dashZ);
+                    if (dist >= DASH_MIN_BLOCKS) {
+                        log.at(Level.INFO).log("Dash of %s: %.1f blocks in %.2f s, top %.1f blocks/s, %.1f more than "
+                                    + "sprinting, height %+.1f", run.playerName, dist, secs, run.dashTop,
+                            dist - secs * dev.endlessparkour.course.JumpModel.SPRINT_SPEED, run.lastY - run.dashY);
+                    }
+                }
+            }
+        } else {
+            run.dashing = false;
+        }
+        run.lastX = pos.x;
+        run.lastY = pos.y;
+        run.lastZ = pos.z;
+        run.lastAt = now;
     }
 
     private static Vector3d position(Ref<EntityStore> ref) {
@@ -410,6 +507,7 @@ final class RunManager {
     /** Called when a player disconnects (any thread). */
     void onDisconnect(UUID id) {
         welcomed.remove(id);
+        hinted.remove(id);
         World w = world;
         if (w == null) {
             return;
@@ -524,7 +622,7 @@ final class RunManager {
         if (old != null) {
             run.hud = old.hud;
         }
-        Platform start = gen.start(0);
+        Platform start = gen.start(startX(old));
         run.add(start);
         run.theme = start.theme();
         while (run.last().index() < cfg.platformsAhead) {
@@ -549,6 +647,20 @@ final class RunManager {
             run.pendingFlights = new ArrayList<>(all.subList(instant, all.size()));
         }
         return run;
+    }
+
+    /**
+     * Where a run starts along X: right after the player's old course when there is one, where the world
+     * around the player is awake. Going back to 0 after a long run (2026-11-22: 135 platforms, some 600
+     * blocks away) meant a part of the world the game had put to sleep: for over a minute islands there
+     * could not fly in and flying objects vanished. A first join starts at 0.
+     */
+    static int startX(Run old) {
+        if (old == null || old.last() == null) {
+            return 0;
+        }
+        int x = old.last().maxX() + RESTART_GAP;
+        return x > MAX_START_X ? 0 : x;
     }
 
     private void teleportToStart(Run run) {
@@ -591,6 +703,9 @@ final class RunManager {
         }
         showHud(run, pr, ref);
         hideGameHud(pr, ref);
+        if (sword) {
+            DashSword.give(ref, cfg.parkourOnly);
+        }
         areaWeather(ref, run.theme);
         if (cfg.unlimitedStamina) {
             fillStamina(ref);
@@ -604,6 +719,9 @@ final class RunManager {
         if (welcomed.add(run.playerId)) {
             pr.sendMessage(Msg.line().text("Jump from island to island. Fall and you start over. Best: ")
                     .value(board.best(run.playerId)).build());
+            if (sword) {
+                pr.sendMessage(Msg.line().text("Sword: hold ").value("attack").text(" to charge, let go to dash.").build());
+            }
             // On a parkour-only server the welcome is one line; the command hint is left out.
             if (!cfg.parkourOnly) {
                 pr.sendMessage(Msg.line().value("/parkour leave").text(" to quit, ").value("/parkour top")
@@ -628,6 +746,12 @@ final class RunManager {
     private void reach(Run run, PlayerRef pr, int index) {
         run.score = index;
         Platform p = run.get(index);
+        long now = System.currentTimeMillis();
+        if (p != null && p.move() != Move.JUMP && run.reachedAt > 0) {
+            log.at(Level.INFO).log("%s of %s onto platform %d (%+d up, gap %.1f) in %.1f s", p.move(), run.playerName,
+                    index, p.jumpDy(), p.jumpGap(), (now - run.reachedAt) / 1000.0);
+        }
+        run.reachedAt = now;
         boolean newBiome = p != null && p.theme() != run.theme;
         if (newBiome) {
             run.theme = p.theme();
@@ -756,6 +880,10 @@ final class RunManager {
 
     private void fail(Run run, PlayerRef pr, long now) {
         runs.remove(run.playerId);
+        Platform missed = run.get(run.score + 1);
+        if (missed != null) {
+            hint(pr, missed.move());
+        }
         Leaderboard.Result r = finish(run, now, true);
         boolean best = r.newBest() && r.score() > 0;
         play(pr, best ? cfg.soundRecord : cfg.soundFail);
@@ -768,6 +896,22 @@ final class RunManager {
         run.awaitingSpawn = true;
         Run next = startRun(run.playerId, run.playerName, run);
         next.afterFall = true;
+    }
+
+    /** After a fall at a special jump: how it works, once per kind and connection. */
+    private void hint(PlayerRef pr, Move m) {
+        Msg line = switch (m) {
+            case DASH -> sword ? Msg.line().text("Too far? Hold ").value("attack").text(", jump, let go to dash.") : null;
+            case BOUNCE -> Msg.line().text("Hop onto the ").value("mushroom").text(" to bounce up.");
+            case CLIMB -> Msg.line().text("Walk into the ").value("ladder").text(" to climb up.");
+            case LADDER_JUMP -> Msg.line().text("Jump at the ").value("ladder").text(" and hold on to climb.");
+            case LADDER_DASH -> sword ? Msg.line().text("Dash at the ").value("ladder").text(": hold ").value("attack")
+                    .text(", jump, let go.") : null;
+            default -> null;
+        };
+        if (line != null && hinted.computeIfAbsent(pr.getUuid(), k -> EnumSet.noneOf(Move.class)).add(m)) {
+            pr.sendMessage(line.build());
+        }
     }
 
     /** Stores the score of a run and tells the player how it went. */
@@ -968,6 +1112,9 @@ final class RunManager {
                 Player player = ref.getStore().getComponent(ref, Player.getComponentType());
                 if (player != null && hiddenHud.length > 0) {
                     player.getHudManager().showHudComponents(pr, hiddenHud);
+                }
+                if (sword) {
+                    DashSword.take(ref);
                 }
             } catch (RuntimeException e) {
                 log.at(Level.FINE).withCause(e).log("Could not restore the player");

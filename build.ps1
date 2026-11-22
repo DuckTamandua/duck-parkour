@@ -42,7 +42,8 @@ $sourceList = Join-Path $out 'sources.txt'
 [IO.File]::WriteAllLines($sourceList, $sources)
 & $javac --release 25 -encoding UTF-8 -Xlint:all -Xlint:-serial -Xlint:-processing -cp $ServerJar -d $classes "@$sourceList"
 if ($LASTEXITCODE -ne 0) { throw 'javac failed' }
-Copy-Item (Join-Path $root 'src\main\resources\manifest.json') $classes
+# The manifest and the asset pack (Server/...: the dash sword's item, interactions and name).
+Copy-Item -Recurse -Force (Join-Path $root 'src\main\resources\*') $classes
 
 $jar = Join-Path $out "EndlessParkour-$version.jar"
 Remove-Item $jar -ErrorAction SilentlyContinue
@@ -56,7 +57,7 @@ if (-not $SkipTests) {
     [IO.File]::WriteAllLines($testList, $tests)
     & $javac --release 25 -encoding UTF-8 -cp "$classes;$ServerJar" -d $testClasses "@$testList"
     if ($LASTEXITCODE -ne 0) { throw 'javac (tests) failed' }
-    foreach ($test in 'dev.endlessparkour.course.GeneratorTest', 'dev.endlessparkour.LeaderboardTest', 'dev.endlessparkour.IslandMoverTest', 'dev.endlessparkour.TintMarginsTest') {
+    foreach ($test in 'dev.endlessparkour.course.GeneratorTest', 'dev.endlessparkour.LeaderboardTest', 'dev.endlessparkour.IslandMoverTest', 'dev.endlessparkour.TintMarginsTest', 'dev.endlessparkour.AssetPackTest') {
         & $java -cp "$testClasses;$classes;$ServerJar" $test 2>&1 | Out-Host
         if ($LASTEXITCODE -ne 0) { throw "$test failed" }
     }

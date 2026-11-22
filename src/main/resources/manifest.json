@@ -1,8 +1,8 @@
 {
   "Group": "EndlessParkour",
   "Name": "EndlessParkour",
-  "Version": "1.3.6",
-  "Description": "«Duck» Parkour: an endless, newly generated jump course in the sky through the areas of Orbis, with a shared top list.",
+  "Version": "1.4.4",
+  "Description": "«Duck» Parkour: an endless, newly generated jump course in the sky through the areas of Orbis, with ladders, bounce mushrooms, a dash sword and a shared top list.",
   "Authors": [
     {
       "Name": "EndlessParkour"
@@ -14,5 +14,5 @@
   "Dependencies": {},
   "OptionalDependencies": {},
   "DisabledByDefault": false,
-  "IncludesAssetPack": false
+  "IncludesAssetPack": true
 }

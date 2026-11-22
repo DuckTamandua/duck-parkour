@@ -1,0 +1,18 @@
+{
+  "$Comment": "«Duck» Parkour: hold to charge (0.25 s), let go to dash. Let go sooner: nothing happens.",
+  "Type": "Charging",
+  "AllowIndefiniteHold": true,
+  "DisplayProgress": true,
+  "CancelOnOtherClick": false,
+  "Effects": {
+    "ItemAnimationId": "StabDashCharging",
+    "ClearAnimationOnFinish": true
+  },
+  "Next": {
+    "0": {
+      "Type": "Simple",
+      "RunTime": 0
+    },
+    "0.25": "EndlessParkour_Dash"
+  }
+}

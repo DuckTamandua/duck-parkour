@@ -43,6 +43,28 @@ public final class Themes {
     private static final String Z3 = "SFX_Discovery_Z3_Medium";
     private static final String Z4 = "SFX_Discovery_Z4_Medium";
 
+    /**
+     * The bouncy mushroom of bounce jumps: the plugin's own block (asset pack), Hytale's bouncy shelf mushroom
+     * (MovementSettings IsBouncy, BounceVelocity 20) in yellow, glowing, with the game's bounce indicator.
+     */
+    public static final String BOUNCE_PAD = "EndlessParkour_Bounce_Mushroom";
+
+    /**
+     * The glowing mark of dash jumps: the plugin's own block (asset pack), Hytale's purple crystal block with
+     * purple sparks; the far row of the take-off island and the near row of the target. Nothing else is
+     * purple and sparkling, so it always means "dash".
+     */
+    public static final String DASH_MARK = "EndlessParkour_Dash_Mark";
+
+    /** The glowing block under every bounce mushroom (a yellow crystal block that gives light). */
+    public static final String BOUNCE_MARK = "Rock_Crystal_Yellow_Block";
+
+    private static final Theme.Feature CLIMB = Theme.Feature.CLIMB;
+    private static final Theme.Feature BOUNCE = Theme.Feature.BOUNCE;
+    private static final Theme.Feature BEAM = Theme.Feature.BEAM;
+    private static final Theme.Feature DROP = Theme.Feature.DROP;
+    private static final Theme.Feature DASH = Theme.Feature.DASH;
+
     // ------------------------------------------------------------------ Emerald Wilds (zone 1)
 
     public static final Theme DRIFTING_PLAINS = Theme.builder("drifting_plains", "Drifting Plains")
@@ -63,6 +85,8 @@ public final class Themes {
             .tree("Wood_Birch_Trunk", "Plant_Leaves_Birch").tree("Wood_Birch_Trunk", "Plant_Leaves_Birch")
             .tree("Wood_Oak_Trunk", "Plant_Leaves_Oak")
             .scatter("Rubble_Stone", 3, "Rubble_Marble", 1, "Wood_Sticks", 1)
+            .ladder("Furniture_Village_Ladder").beam("Wood_Lightwood_Planks")
+            .features(0.10, CLIMB, 2, BEAM, 1)
             .build();
 
     public static final Theme SEEDLING_WOODS = Theme.builder("seedling_woods", "Seedling Woods")
@@ -82,6 +106,8 @@ public final class Themes {
             .tree("Wood_Oak_Trunk", "Plant_Leaves_Oak").tree("Wood_Oak_Trunk", "Plant_Leaves_Oak")
             .tree("Wood_Birch_Trunk", "Plant_Leaves_Birch").tree("Wood_Beech_Trunk", "Plant_Leaves_Beech")
             .scatter("Rubble_Stone", 2, "Rubble_Marble", 1, "Wood_Sticks", 2)
+            .ladder("Furniture_Kweebec_Ladder").beam("Wood_Greenwood_Planks")
+            .features(0.16, BOUNCE, 3, CLIMB, 2)
             .build();
 
     public static final Theme THE_FENS = Theme.builder("the_fens", "The Fens")
@@ -101,6 +127,8 @@ public final class Themes {
             .tree("Wood_Sadwillow_Trunk", "Plant_Leaves_Sadwillow").tree("Wood_Ash_Trunk", "Plant_Leaves_Ash")
             .tree("Wood_Oak_Trunk", "Plant_Leaves_Oak")
             .scatter("Rubble_Stone", 2, "Wood_Sticks", 1)
+            .ladder("Furniture_Jungle_Ladder").beam("Wood_Deadwood_Planks")
+            .features(0.20, BOUNCE, 3, CLIMB, 1, DROP, 1)
             .build();
 
     public static final Theme KWEEBEC_VILLAGE = Theme.builder("kweebec_village", "Kweebec Village")
@@ -119,6 +147,8 @@ public final class Themes {
             .tree("Wood_Oak_Trunk", "Plant_Leaves_Autumn").tree("Wood_Oak_Trunk", "Plant_Leaves_Autumn")
             .tree("Wood_Maple_Trunk", "Plant_Leaves_Maple")
             .scatter("Wood_Sticks", 2, "Rubble_Stone", 1)
+            .ladder("Furniture_Kweebec_Ladder").beam("Wood_Hardwood_Planks")
+            .features(0.18, CLIMB, 3, BEAM, 2)
             .build();
 
     public static final Theme TRORK_OUTPOST = Theme.builder("trork_outpost", "Trork Outpost")
@@ -135,6 +165,8 @@ public final class Themes {
             .tints("#5B9E28", 1, "#7EA629", 1)
             .tree("Wood_Beech_Trunk", "Plant_Leaves_Beech").tree("Rock_Quartzite_Brick", null)
             .scatter("Rubble_Stone", 2, "Wood_Sticks", 1)
+            .ladder("Furniture_Crude_Ladder").beam("Wood_Softwood_Planks")
+            .features(0.20, BEAM, 2, CLIMB, 2)
             .build();
 
     public static final Theme FORGOTTEN_TEMPLE = Theme.builder("forgotten_temple", "Forgotten Temple")
@@ -151,6 +183,8 @@ public final class Themes {
             .tints("#5B9E28", 1, "#3B8E32", 1)
             .tree("Rock_Marble_Brick", null).tree("Rock_Marble_Brick_Smooth", null)
             .scatter("Rubble_Marble", 2, "Rubble_Stone", 1)
+            .ladder("Furniture_Temple_Emerald_Ladder").beam("Rock_Marble_Brick_Smooth")
+            .features(0.20, CLIMB, 3, BEAM, 1, DROP, 1)
             .build();
 
     // ------------------------------------------------------------------ Howling Sands (zone 2)
@@ -171,6 +205,8 @@ public final class Themes {
             .tints("#BFAC29", 2, "#D8AF49", 2, "#D39E3D", 1, "#D7BE35", 1, "#E5C442", 1)
             .tree("Wood_Gumboab_Trunk", "Plant_Leaves_Gumboab").tree("Wood_Dry_Trunk", "Plant_Leaves_Dry")
             .scatter("Rubble_Sandstone", 3)
+            .ladder("Furniture_Desert_Ladder").beam("Wood_Drywood_Planks")
+            .features(0.20, DASH, 3, CLIMB, 1)
             .build();
 
     public static final Theme FERAN_VILLAGE = Theme.builder("feran_village", "Feran Village")
@@ -187,6 +223,8 @@ public final class Themes {
             .tints("#D8AF49", 1, "#BFAC29", 1)
             .tree("Wood_Palm_Trunk", "Plant_Leaves_Palm").tree("Wood_Dry_Trunk", "Plant_Leaves_Dry")
             .scatter("Rubble_Sandstone", 2)
+            .ladder("Furniture_Feran_Ladder").beam("Wood_Drywood_Planks")
+            .features(0.22, CLIMB, 2, BEAM, 2, DASH, 1)
             .build();
 
     public static final Theme BADLANDS = Theme.builder("badlands", "Badlands")
@@ -204,6 +242,8 @@ public final class Themes {
             .tints("#D5BA6E", 2, "#DA9137", 1, "#CDB868", 1)
             .tree("Wood_Palo_Trunk", "Plant_Leaves_Palo").tree("Wood_Dry_Trunk", "Plant_Leaves_Dry")
             .scatter("Rubble_Sandstone_Red", 3)
+            .ladder("Furniture_Desert_Ladder").beam("Rock_Sandstone_Red_Brick")
+            .features(0.24, DASH, 2, DROP, 2, CLIMB, 2)
             .build();
 
     public static final Theme SCARAK_HIVE = Theme.builder("scarak_hive", "Scarak Hive")
@@ -221,6 +261,8 @@ public final class Themes {
             .tints("#D5BA6E", 1, "#CDB868", 1)
             .tree("Soil_Hive_Brick", null).tree("Soil_Hive", null)
             .scatter("Rubble_Basalt", 2)
+            .ladder("Furniture_Temple_Scarak_Ladder").beam("Soil_Hive_Brick")
+            .features(0.22, DROP, 3, CLIMB, 2, BOUNCE, 1)
             .build();
 
     public static final Theme DESOLATE_BASIN = Theme.builder("desolate_basin", "Desolate Basin")
@@ -237,6 +279,8 @@ public final class Themes {
             .tints("#D5BA6E", 1, "#D6C565", 1, "#E3C75D", 1)
             .tree("Deco_Bone_Full", null)
             .scatter("Rubble_Sandstone", 2)
+            .ladder("Furniture_Ancient_Ladder").beam("Deco_Bone_Full")
+            .features(0.24, DASH, 3, BEAM, 1, CLIMB, 1)
             .build();
 
     // ------------------------------------------------------------------ Oceans
@@ -258,6 +302,8 @@ public final class Themes {
             .tints("#669415", 1)
             .tree("Wood_Banyan_Trunk", "Plant_Leaves_Banyan").tree("Wood_Palm_Trunk", "Plant_Leaves_Palm")
             .scatter("Rubble_Stone", 1)
+            .ladder("Furniture_Temple_Wind_Ladder").beam("Wood_Tropicalwood_Planks")
+            .features(0.24, DROP, 2, BOUNCE, 2, CLIMB, 1)
             .build();
 
     // ------------------------------------------------------------------ Whisperfrost Frontiers (zone 3)
@@ -279,6 +325,8 @@ public final class Themes {
             .tree("Wood_Fir_Trunk", "Plant_Leaves_Fir").tree("Wood_Fir_Trunk", "Plant_Leaves_Fir")
             .tree("Wood_Redwood_Trunk", "Plant_Leaves_Redwood")
             .scatter("Rubble_Basalt", 2)
+            .ladder("Furniture_Lumberjack_Ladder").beam("Wood_Redwood_Planks")
+            .features(0.22, CLIMB, 2, DASH, 2)
             .build();
 
     public static final Theme BOREAL_REACH = Theme.builder("boreal_reach", "Boreal Reach")
@@ -298,6 +346,8 @@ public final class Themes {
             .tree("Wood_Cedar_Trunk", "Plant_Leaves_Cedar").tree("Wood_Cedar_Trunk", "Plant_Leaves_Cedar")
             .tree("Wood_Fir_Trunk", "Plant_Leaves_Fir")
             .scatter("Rubble_Shale", 2, "Rubble_Stone", 1)
+            .ladder("Furniture_Lumberjack_Ladder").beam("Wood_Softwood_Planks")
+            .features(0.24, CLIMB, 2, BOUNCE, 2, BEAM, 1)
             .build();
 
     public static final Theme OUTLANDER_CAMP = Theme.builder("outlander_camp", "Outlander Camp")
@@ -315,6 +365,8 @@ public final class Themes {
             .tints("#487E4D", 1)
             .tree("Wood_Fir_Trunk", "Plant_Leaves_Fir").tree("Rock_Shale_Brick", null)
             .scatter("Rubble_Shale", 2)
+            .ladder("Furniture_Human_Ruins_Ladder").beam("Wood_Darkwood_Planks")
+            .features(0.24, CLIMB, 2, BEAM, 2, DASH, 1)
             .build();
 
     public static final Theme THE_EVERFROST = Theme.builder("the_everfrost", "The Everfrost")
@@ -332,6 +384,8 @@ public final class Themes {
             .tints("#699587", 3, "#487E4D", 1)
             .tree("Wood_Fir_Trunk", "Plant_Leaves_Fir_Snow")
             .scatter("Rubble_Ice", 2, "Rubble_Shale", 1)
+            .ladder("Furniture_Frozen_Castle_Ladder").beam("Rock_Shale_Brick")
+            .features(0.26, DASH, 2, DROP, 2, CLIMB, 2)
             .build();
 
     // ------------------------------------------------------------------ Devastated Lands (zone 4)
@@ -353,6 +407,8 @@ public final class Themes {
             .tints("#786133", 2, "#766633", 1, "#62626C", 1, "#595F6D", 1)
             .tree("Wood_Petrified_Trunk", "Plant_Leaves_Petrified")
             .scatter("Rubble_Basalt", 2, "Rubble_Volcanic", 1)
+            .ladder("Furniture_Goblin_Ladder").beam("Rock_Slate_Brick")
+            .features(0.28, DASH, 3, DROP, 1, CLIMB, 1)
             .build();
 
     public static final Theme CHARRED_WOODLANDS = Theme.builder("charred_woodlands", "Charred Woodlands")
@@ -372,6 +428,8 @@ public final class Themes {
             .tints("#A29D55", 2, "#AFAA5F", 1, "#4E4E4E", 1)
             .tree("Wood_Burnt_Trunk", "Plant_Leaves_Burnt")
             .scatter("Rubble_Volcanic", 2, "Rubble_Slate", 1)
+            .ladder("Furniture_Temple_Dark_Ladder").beam("Rock_Volcanic_Brick")
+            .features(0.30, DASH, 3, CLIMB, 2, BOUNCE, 1, DROP, 1)
             .build();
 
     /** Every run begins here. */

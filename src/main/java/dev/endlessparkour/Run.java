@@ -39,6 +39,26 @@ final class Run {
     int teleportTries;
     ParkourHud hud;
     int hudBoardVersion = -1;
+    /** When the player last reached a platform (for the special jump log). */
+    long reachedAt;
+    /** Dash watch: the last position seen and, during a dash, where and when it began and its top speed. */
+    double lastX;
+    double lastY;
+    double lastZ;
+    long lastAt;
+    boolean dashing;
+    double dashX;
+    double dashY;
+    double dashZ;
+    long dashAt;
+    double dashTop;
+    /** Bounce watch: rising fast, from where, and the highest point so far. */
+    boolean bouncing;
+    double bounceFrom;
+    double bounceTop;
+    /** Pull-up watch (Hytale's mantling at an edge): going on, and the height it began at. */
+    boolean mantling;
+    double mantleFrom;
 
     Run(UUID playerId, String playerName, int lane, CourseGenerator generator, long now) {
         this.playerId = playerId;

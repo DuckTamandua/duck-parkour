@@ -1,0 +1,43 @@
+{
+  "$Comment": "«Duck» Parkour: the dash. 20 blocks/s forward (along the view, level) for 0.25 s, at most once a second. The course counts on a gain of 3 blocks (JumpModel.DASH_GAIN).",
+  "Type": "CooldownCondition",
+  "Id": "EndlessParkour_Dash",
+  "Next": {
+    "Type": "Serial",
+    "Interactions": [
+      {
+        "Type": "TriggerCooldown",
+        "Cooldown": {
+          "Id": "EndlessParkour_Dash",
+          "Cooldown": 1.0
+        }
+      },
+      {
+        "Type": "ApplyForce",
+        "Direction": {
+          "X": 0,
+          "Y": 0,
+          "Z": -1
+        },
+        "AdjustVertical": false,
+        "Force": 20,
+        "Duration": 0.25,
+        "WaitForGround": false,
+        "ChangeVelocityType": "Set",
+        "VelocityConfig": {
+          "AirResistance": 0.85,
+          "AirResistanceMax": 0.85,
+          "GroundResistance": 0.82,
+          "GroundResistanceMax": 0.82,
+          "Threshold": 3.0,
+          "Style": "Exp"
+        },
+        "Effects": {
+          "ItemAnimationId": "StabDashCharged",
+          "WorldSoundEventId": "SFX_Light_Melee_T2_Lunge",
+          "LocalSoundEventId": "SFX_Sword_T2_Lunge_Local"
+        }
+      }
+    ]
+  }
+}

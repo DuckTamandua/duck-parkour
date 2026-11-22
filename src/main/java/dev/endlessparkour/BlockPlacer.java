@@ -11,6 +11,8 @@ import com.hypixel.hytale.server.core.asset.util.ColorParseUtil;
 import com.hypixel.hytale.server.core.universe.world.chunk.BlockChunk;
 import com.hypixel.hytale.server.core.universe.world.chunk.section.EnvironmentSection;
 import dev.endlessparkour.course.Platform;
+import com.hypixel.hytale.math.shape.Box;
+import com.hypixel.hytale.server.core.asset.type.blockhitbox.BlockBoundingBoxes;
 import com.hypixel.hytale.server.core.asset.type.blocktype.config.BlockType;
 import com.hypixel.hytale.server.core.asset.type.blocktype.config.Rotation;
 import com.hypixel.hytale.server.core.asset.type.blocktype.config.RotationTuple;
@@ -45,6 +47,8 @@ final class BlockPlacer implements BlockAccess {
     private final Map<String, Integer> ids = new HashMap<>();
     private final Map<String, Integer> envIds = new HashMap<>();
     private final int flipped;
+    /** For blocks that lean on a wall (ladders): the rotation for each side of the cell, by block name. */
+    private final Map<String, int[]> wallTurns = new HashMap<>();
     private boolean warned;
     private boolean warnedArea;
 
@@ -350,6 +354,17 @@ final class BlockPlacer implements BlockAccess {
         return bs == null ? -1 : bs.get(x, y, z);
     }
 
+    /** The rotation of the block at a position, or -1 when its section is not loaded. */
+    int rotationAt(int x, int y, int z) {
+        ChunkStore cs = world.getChunkStore();
+        Ref<ChunkStore> sec = cs.getChunkSectionReferenceAtBlock(x, y, z);
+        if (sec == null || !sec.isValid()) {
+            return -1;
+        }
+        BlockSection bs = cs.getStore().getComponent(sec, BlockSection.getComponentType());
+        return bs == null ? -1 : bs.getRotationIndex(x, y, z);
+    }
+
     @Override
     public boolean place(Placement p, int x, int y, int z) {
         ChunkStore cs = world.getChunkStore();
@@ -425,6 +440,55 @@ final class BlockPlacer implements BlockAccess {
         return done;
     }
 
+    /** The rotation of a placed block: upside down, turned to lean on its wall, or as it comes. */
+    int rotation(Placement p, BlockType type) {
+        if (p.flipped()) {
+            return flipped;
+        }
+        if (!p.attached()) {
+            return 0;
+        }
+        return wallTurns.computeIfAbsent(p.block(), n -> wallTurns(type))[p.facing()];
+    }
+
+    /**
+     * For each side of a cell (+X, +Z, -X, -Z, as in {@link Placement}), the turn that puts the block's
+     * hitbox against that side: a ladder's board against the wall it leans on. Taken from the game's own
+     * turned hitboxes, so it needs no knowledge of which way a turn goes.
+     */
+    static int[] wallTurns(BlockType type) {
+        int[] out = {-1, -1, -1, -1};
+        BlockBoundingBoxes boxes = type == null ? null : BlockBoundingBoxes.getAssetMap().getAsset(type.getHitboxTypeIndex());
+        if (boxes != null) {
+            for (Rotation yaw : Rotation.VALUES) {
+                Box b = boxes.get(yaw, Rotation.None, Rotation.None).getBoundingBox();
+                int side = side(b);
+                if (side >= 0 && out[side] < 0) {
+                    out[side] = RotationTuple.index(yaw, Rotation.None, Rotation.None);
+                }
+            }
+        }
+        for (int i = 0; i < out.length; i++) {
+            if (out[i] < 0) {
+                out[i] = 0;
+            }
+        }
+        return out;
+    }
+
+    /** The side of its cell a box lies against (+X, +Z, -X, -Z as in {@link Placement}), -1 when it is in the middle. */
+    static int side(Box b) {
+        double cx = (b.min.x + b.max.x) / 2 - 0.5;
+        double cz = (b.min.z + b.max.z) / 2 - 0.5;
+        if (Math.abs(cx) < 0.2 && Math.abs(cz) < 0.2) {
+            return -1;
+        }
+        if (Math.abs(cx) >= Math.abs(cz)) {
+            return cx > 0 ? Placement.EAST : Placement.WEST;
+        }
+        return cz > 0 ? Placement.SOUTH : Placement.NORTH;
+    }
+
     /** Sets (or clears) the block of p at (x, y, z) instead of its own position. */
     private void set(ChunkStore cs, Ref<ChunkStore> sec, int x, int y, int z, Placement p, boolean clear) {
         try {
@@ -440,7 +504,7 @@ final class BlockPlacer implements BlockAccess {
             if (type == null) {
                 return;
             }
-            BlockOperations.setBlock(cs, sec, x, y, z, id, type, p.flipped() ? flipped : 0, 0, SETTINGS);
+            BlockOperations.setBlock(cs, sec, x, y, z, id, type, rotation(p, type), 0, SETTINGS);
         } catch (RuntimeException e) {
             if (!warned) {
                 warned = true;

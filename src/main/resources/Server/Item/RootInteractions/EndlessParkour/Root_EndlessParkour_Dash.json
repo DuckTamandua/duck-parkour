@@ -1,0 +1,6 @@
+{
+  "RequireNewClick": true,
+  "Interactions": [
+    "EndlessParkour_Dash_Charge"
+  ]
+}

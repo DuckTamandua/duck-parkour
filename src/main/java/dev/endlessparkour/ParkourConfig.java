@@ -95,6 +95,16 @@ public final class ParkourConfig {
      * "fly" (they fly along at full size) or "land" (they appear when the island lands).
      */
     public String plantStyle = "grow";
+    /**
+     * Special jumps besides the normal ones, each area with its own mix: ladder towers, bounce mushrooms,
+     * long beams, deep drops and dash gaps. False: normal jumps only.
+     */
+    public boolean specialJumps = true;
+    /**
+     * Every player holds the dash sword: hold attack to charge it, let go to dash forward. False: no sword
+     * and no dash gaps.
+     */
+    public boolean dashSword = true;
     /** Jumps per difficulty level 1 to 10 (the areas say which level they are). */
     public Tier[] levels = Tier.defaults();
 

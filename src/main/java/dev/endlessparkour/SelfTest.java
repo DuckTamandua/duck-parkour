@@ -1,5 +1,7 @@
 package dev.endlessparkour;
 
+import dev.endlessparkour.course.Move;
+import com.hypixel.hytale.server.core.asset.type.blockhitbox.BlockBoundingBoxes;
 import com.hypixel.hytale.server.core.HytaleServer;
 import com.hypixel.hytale.server.core.Message;
 import com.hypixel.hytale.server.core.asset.type.blocktype.config.BlockType;
@@ -80,6 +82,7 @@ final class SelfTest {
             int maxY = Integer.MIN_VALUE;
             Map<Integer, Integer> dys = new TreeMap<>();
             Map<String, Integer> themes = new LinkedHashMap<>();
+            Map<Move, Integer> specials = new TreeMap<>();
             for (int i = 0; i < list.size(); i++) {
                 Platform b = list.get(i);
                 minY = Math.min(minY, b.topY());
@@ -91,6 +94,11 @@ final class SelfTest {
                 Platform a = list.get(i - 1);
                 double gap = a.gapTo(b);
                 int dy = b.topY() - a.topY();
+                if (b.move() != Move.JUMP) {
+                    // Ladders, bounces, dashes and drops have their own reach (checked by GeneratorTest).
+                    specials.merge(b.move(), 1, Integer::sum);
+                    continue;
+                }
                 maxGap = Math.max(maxGap, gap);
                 dys.merge(dy, 1, Integer::sum);
                 if (!JumpModel.feasible(gap, dy)) {
@@ -107,6 +115,8 @@ final class SelfTest {
                     .text(", widest gap ").value(String.format("%.2f", maxGap))
                     .text(", height ").value(minY + ".." + maxY).text(", dy ").value(dys).build());
             out.accept(Msg.line().text("Biomes: ").value(themes).build());
+            out.accept(Msg.line().text("Special jumps: ").value(specials.isEmpty() ? "none" : specials)
+                    .text(", dash sword ").value(DashSword.available() ? "ready" : "missing").build());
             if (fly) {
                 flyTest(runs, cfg, list, out, w);
                 return;
@@ -238,6 +248,35 @@ final class SelfTest {
         }
         out.accept(Msg.line().text("Check after 3 s: ").value(ok).text(" ok, ").value(wrong.values().stream()
                 .mapToInt(Integer::intValue).sum()).text(" wrong, ").value(unloaded).text(" not loaded").build());
+        // Ladders must lean on their tower: turned so that their board (the hitbox) is on the wall's side.
+        int leaning = 0;
+        int turnedWrong = 0;
+        List<String> turnSamples = new ArrayList<>();
+        for (Placement pl : all) {
+            if (!pl.attached()) {
+                continue;
+            }
+            int got = placer.rotationAt(pl.x(), pl.y(), pl.z());
+            BlockType type = BlockType.getAssetMap().getAsset(placer.id(pl.block()));
+            BlockBoundingBoxes boxes = type == null ? null : BlockBoundingBoxes.getAssetMap().getAsset(type.getHitboxTypeIndex());
+            int side = got < 0 || boxes == null ? -2 : BlockPlacer.side(boxes.get(got).getBoundingBox());
+            if (got >= 0 && got == placer.rotation(pl, type) && side == pl.facing()) {
+                leaning++;
+            } else {
+                turnedWrong++;
+                if (turnSamples.size() < 4) {
+                    turnSamples.add(pl.block() + " at " + pl.x() + " " + pl.y() + " " + pl.z() + ": turn " + got
+                            + ", hitbox on side " + side + ", wanted side " + pl.facing());
+                }
+            }
+        }
+        if (leaning + turnedWrong > 0) {
+            out.accept(Msg.line().text("Ladders: ").value(leaning).text(" lean on their tower, ").value(turnedWrong)
+                    .text(" turned wrong").build());
+            for (String s : turnSamples) {
+                out.accept(Msg.plain().gray("  " + s).build());
+            }
+        }
         if (!wrong.isEmpty()) {
             out.accept(Msg.line().bad("Wrong blocks: ").value(wrong).build());
             for (String s : samples) {

@@ -140,6 +140,9 @@ public final class IslandMoverTest {
 
         @Override
         public Object spawn(Placement b, double x, double y, double z, float scale, long lifetimeMs) {
+            if (b.attached()) {
+                throw new IllegalStateException("ladders never fly: " + b);
+            }
             if (b.decor() && !plantsFly) {
                 throw new IllegalStateException("plants should not fly here: " + b.block());
             }
@@ -225,6 +228,7 @@ public final class IslandMoverTest {
         staysInGame();
         waitsForColours();
         firstIslandsNotTooEarly();
+        ladders();
         if (failures > 0) {
             System.out.println("FAILED: " + failures);
             System.exit(1);
@@ -558,6 +562,43 @@ public final class IslandMoverTest {
                         n + ": plants fly at the island's size");
                 case LAND -> check(plantAtHalf == 0 && plantNearEnd == 0, n + ": no plant objects");
             }
+        }
+    }
+
+    /** A tower with a ladder: the ladder makes no objects and appears with the landing, in every plant style. */
+    private static void ladders() {
+        Platform tower = null;
+        for (long seed = 1; seed < 200 && tower == null; seed++) {
+            for (Platform p : course(seed, 120)) {
+                if (p.move() == dev.endlessparkour.course.Move.CLIMB) {
+                    tower = p;
+                    break;
+                }
+            }
+        }
+        check(tower != null, "courses have ladder towers");
+        if (tower == null) {
+            return;
+        }
+        int ladder = 0;
+        for (Placement b : tower.blocks()) {
+            if (b.attached()) {
+                ladder++;
+            }
+        }
+        check(ladder >= 3, "the tower has a ladder (" + ladder + ")");
+        for (IslandMover.PlantStyle style : IslandMover.PlantStyle.values()) {
+            Sim sim = new Sim();
+            sim.objects.plantsFly = style != IslandMover.PlantStyle.LAND;
+            sim.mover.flyIn(OWNER, tower, AHEAD, DISTANCE, 300, MILLIS, style);
+            int most = 0;
+            for (int i = 0; i < 80; i++) {
+                sim.tick();
+                most = Math.max(most, sim.objects.live.size());
+            }
+            check(most > 0 && most <= tower.blocks().size() - ladder, style.id() + ": no objects for the ladder (" + most + ")");
+            check(sim.world.blocks.equals(expected(List.of(tower))) && sim.objects.live.isEmpty(),
+                    style.id() + ": the tower lands whole, ladder included");
         }
     }
 
@@ -932,7 +973,9 @@ public final class IslandMoverTest {
                 check(plan.start() == arrived + 600, "the first island still starts 600 ms after arriving ("
                         + (plan.start() - arrived) + " ms)");
                 check(started >= plan.start() && started <= plan.start() + TICK, "and flies on time");
-                check(sim.objects.next == p.blocks().size(), "with every block");
+                // Every block flies, but ladders: they appear with the landing.
+                long flying = p.blocks().stream().filter(b -> !b.attached()).count();
+                check(sim.objects.next == flying, "with every block (" + sim.objects.next + " of " + flying + ")");
             }
             check(sim.world.blocks.equals(expected(List.of(p))) && sim.objects.live.isEmpty(), "landed whole");
         }

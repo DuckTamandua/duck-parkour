@@ -1,0 +1,13 @@
+{
+  "$Comment": "«Duck» Parkour: the dash sword. Hold attack to charge it, let go to dash forward.",
+  "Parent": "Weapon_Sword_Mithril",
+  "TranslationProperties": {
+    "Name": "endlessparkour.items.EndlessParkour_Dash_Sword.name",
+    "Description": "endlessparkour.items.EndlessParkour_Dash_Sword.description"
+  },
+  "MaxStack": 1,
+  "Interactions": {
+    "Primary": "Root_EndlessParkour_Dash"
+  },
+  "DropOnDeath": false
+}

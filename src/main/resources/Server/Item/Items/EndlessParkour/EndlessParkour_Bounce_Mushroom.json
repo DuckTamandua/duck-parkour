@@ -1,0 +1,86 @@
+{
+  "$Comment": "«Duck» Parkour: the bounce mushroom. Hytale's bouncy shelf mushroom (Plant_Crop_Mushroom_Shelve_Brown), yellow, glowing, with the game's own bounce indicator (beam, rings and rising sparks).",
+  "TranslationProperties": {
+    "Name": "endlessparkour.items.EndlessParkour_Bounce_Mushroom.name"
+  },
+  "Icon": "Icons/ItemsGenerated/Plant_Crop_Mushroom_Shelve_Brown.png",
+  "Categories": [
+    "Blocks.Plants"
+  ],
+  "BlockType": {
+    "Material": "Solid",
+    "DrawType": "Model",
+    "Opacity": "Transparent",
+    "CustomModel": "Blocks/Foliage/Plants/Mushroom_Medium.blockymodel",
+    "CustomModelTexture": [
+      {
+        "Texture": "Blocks/Foliage/Plants/Mushroom_Medium_Textures/Yellow.png",
+        "Weight": 1
+      }
+    ],
+    "Flags": {},
+    "Gathering": {
+      "Breaking": {
+        "GatherType": "Woods"
+      }
+    },
+    "MaxSupportDistance": 5,
+    "Support": {
+      "Down": [
+        {
+          "AllowSupportPropagation": false,
+          "FaceType": "Full",
+          "Rotate": false
+        }
+      ],
+      "CardinalDirections": [
+        {
+          "FaceType": "Full",
+          "Rotate": false
+        }
+      ]
+    },
+    "BlockSoundSetId": "Mushroom",
+    "PhysicalMaterialId": "Foliage",
+    "BlockParticleSetId": "Dust",
+    "MovementSettings": {
+      "IsBouncy": true,
+      "BounceVelocity": 20
+    },
+    "Interactions": {
+      "CollisionEnter": {
+        "Interactions": [
+          {
+            "Type": "ApplyEffect",
+            "EffectId": {
+              "Parent": "Immunity_Fall",
+              "Infinite": false,
+              "Duration": 2
+            }
+          }
+        ]
+      }
+    },
+    "Light": {
+      "Color": "#fd7"
+    },
+    "Particles": [
+      {
+        "SystemId": "Dungeon_Goblin_Indicator_Mushroom_Bouncy",
+        "TargetEntityPart": "Self",
+        "PositionOffset": {
+          "Y": -0.5
+        }
+      }
+    ],
+    "ParticleColor": "#d9b13b",
+    "TextureComputedColor": "#c49a2e"
+  },
+  "PlayerAnimationsId": "Block",
+  "Tags": {
+    "Type": [
+      "Plant"
+    ]
+  },
+  "ItemSoundSetId": "ISS_Items_Foliage"
+}

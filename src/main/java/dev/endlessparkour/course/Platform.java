@@ -23,9 +23,16 @@ public final class Platform {
     private final int tint;
     private final double spawnX;
     private final double spawnZ;
+    private final Move move;
 
     Platform(int index, Theme theme, int topY, int bottomY, int[] cellX, int[] cellZ,
              List<Placement> blocks, List<int[]> boxes, boolean sectionStart, int jumpDy, double jumpGap, int tint) {
+        this(index, theme, topY, bottomY, cellX, cellZ, blocks, boxes, sectionStart, jumpDy, jumpGap, tint, Move.JUMP);
+    }
+
+    Platform(int index, Theme theme, int topY, int bottomY, int[] cellX, int[] cellZ,
+             List<Placement> blocks, List<int[]> boxes, boolean sectionStart, int jumpDy, double jumpGap, int tint,
+             Move move) {
         this.index = index;
         this.theme = theme;
         this.topY = topY;
@@ -38,6 +45,7 @@ public final class Platform {
         this.jumpDy = jumpDy;
         this.jumpGap = jumpGap;
         this.tint = tint;
+        this.move = move;
         int x0 = Integer.MAX_VALUE;
         int x1 = Integer.MIN_VALUE;
         int z0 = Integer.MAX_VALUE;
@@ -147,6 +155,11 @@ public final class Platform {
     /** Gap (in blocks) of the jump that leads to this platform. */
     public double jumpGap() {
         return jumpGap;
+    }
+
+    /** How the player gets onto this platform from the one before. */
+    public Move move() {
+        return move;
     }
 
     /** Grass colour of this platform's columns as 0xRRGGBB. */

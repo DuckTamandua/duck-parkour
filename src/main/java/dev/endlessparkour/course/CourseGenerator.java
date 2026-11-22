@@ -20,7 +20,22 @@ public final class CourseGenerator {
     /** Chance that a platform (pillars too) gets a decoration island (area starts always try one). */
     private static final double LANDMARK_CHANCE = 0.22;
 
-    private enum Kind { START, GATE, NORMAL, PILLAR }
+    private enum Kind { START, GATE, NORMAL, PILLAR, TOWER, BEAM }
+
+    /**
+     * What sets a special island apart: how the player gets onto it, its depth (0: the usual), a row of
+     * cells (by X) that gets no plants (Integer.MIN_VALUE: none), blocks it puts on the island before
+     * (the ladder up a tower) or on itself (the mushroom of a bounce), and the cells whose top two layers
+     * glow with the mark block: the row markX (Integer.MIN_VALUE: none), only the cell at markZ of it unless
+     * markZ is Integer.MIN_VALUE.
+     */
+    private record Extra(Move move, int depth, int bareX, List<Placement> attached, int markX, int markZ, String mark) {
+        static final Extra NONE = new Extra(Move.JUMP, 0, Integer.MIN_VALUE, List.of());
+
+        Extra(Move move, int depth, int bareX, List<Placement> attached) {
+            this(move, depth, bareX, attached, Integer.MIN_VALUE, Integer.MIN_VALUE, null);
+        }
+    }
 
     private final Random rng;
     private final List<Theme> themes;
@@ -40,6 +55,14 @@ public final class CourseGenerator {
     private int nextSection;
     private int fallbacks;
     private int lastResorts;
+    /** The island before was built for this special jump (its far row is kept bare); null: none. */
+    private Theme.Feature pending;
+    /** Platforms since the last special jump. */
+    private int sinceFeature;
+    /** Cells past the take-off island's edge of a ladder that takes a dash. */
+    static final int DASH_LADDER_CELLS = 8;
+    /** A dash target built together with its take-off island: the next platform handed out. */
+    private Platform nextUp;
 
     public CourseGenerator(long seed, List<Theme> themes, Theme start, Tier[] levels, int laneZ, int baseY,
                            int minY, int maxY, int sectionMin, int sectionMax, int maxDrift) {
@@ -101,6 +124,13 @@ public final class CourseGenerator {
 
     /** The platform after prev. */
     public Platform next(Platform prev) {
+        if (nextUp != null && nextUp.index() == prev.index() + 1) {
+            Platform p = nextUp;
+            nextUp = null;
+            sinceFeature = 0;
+            return p;
+        }
+        nextUp = null;
         int index = prev.index() + 1;
         boolean sectionStart = index == nextSection;
         if (sectionStart) {
@@ -110,6 +140,27 @@ public final class CourseGenerator {
             nextSection = index + between(sectionMin, sectionMax);
         }
         Tier tier = tierFor(theme);
+        Theme.Feature second = pending;
+        pending = null;
+        if (second != null && !sectionStart) {
+            for (int attempt = 0; attempt < 40; attempt++) {
+                Platform p = secondStep(second, prev, index, tier);
+                if (p != null) {
+                    sinceFeature = 0;
+                    return p;
+                }
+            }
+        } else if (!sectionStart && index >= 3 && sinceFeature >= 2 && rng.nextDouble() < theme.featureChance()) {
+            Theme.Feature f = theme.pickFeature(rng);
+            for (int attempt = 0; attempt < 30 && f != null; attempt++) {
+                Platform p = firstStep(f, prev, index, tier);
+                if (p != null) {
+                    sinceFeature = 0;
+                    return p;
+                }
+            }
+        }
+        sinceFeature++;
         for (int attempt = 0; attempt < 80; attempt++) {
             Platform p = tryNext(prev, index, tier, sectionStart, attempt >= 50);
             if (p != null) {
@@ -233,6 +284,394 @@ public final class CourseGenerator {
         return clashes(p.boxes().get(0)) ? null : p;
     }
 
+    // ------------------------------------------------------------------ special jumps
+
+    /** The first island of a special jump: the whole jump, or the island a ladder or bounce starts from. */
+    private Platform firstStep(Theme.Feature f, Platform prev, int index, Tier tier) {
+        return switch (f) {
+            case BEAM -> beam(prev, index, tier);
+            case DROP -> drop(prev, index, tier);
+            case DASH -> dashPair(prev, index, tier);
+            case BOUNCE -> bouncePair(prev, index, tier);
+            case CLIMB -> climb(prev, index, tier);
+        };
+    }
+
+    /** A long beam, one block wide, along the course: long on easy levels, short on hard ones. */
+    private Platform beam(Platform prev, int index, Tier tier) {
+        int level = theme.level();
+        int dy = Math.max(-1, Math.min(1, pickDy(tier, prev.topY())));
+        int maxGap = tier.maxGapFor(dy);
+        int g = between(Math.min(tier.minGap, maxGap), maxGap);
+        int z = midZ(prev, 1) + between(-1, 1);
+        int length = level <= 4 ? between(4, 5) : level <= 7 ? between(3, 4) : 3;
+        List<int[]> cells = rect(prev.maxX() + 1 + g, z, length, 1);
+        double gap = gap(prev, cells);
+        if (gap > maxGap + 0.25 || !JumpModel.feasible(gap, dy)) {
+            return null;
+        }
+        int topY = prev.topY() + dy;
+        return finish(prev, index, cells, topY, Kind.BEAM, path(prev, cells, topY), Extra.NONE, false, tier);
+    }
+
+    /** An island far below: a drop of 5 to 9 blocks. */
+    private Platform drop(Platform prev, int index, Tier tier) {
+        int depth = theme.level() >= 6 ? between(6, 9) : between(5, 8);
+        int topY = prev.topY() - depth;
+        if (topY < minY) {
+            return null;
+        }
+        int g = between(1, theme.level() >= 6 ? 3 : 2);
+        int[] size = size(tier, 1, false);
+        int w = size[0];
+        int d = size[1];
+        List<int[]> cells = shape(prev.maxX() + 1 + g, midZ(prev, d) + between(-1, 1), w, d, true);
+        double gap = gap(prev, cells);
+        if (gap > g + 0.25 || !JumpModel.feasible(gap, -depth)) {
+            return null;
+        }
+        return finish(prev, index, cells, topY, Kind.NORMAL, path(prev, cells, topY),
+                new Extra(Move.DROP, 0, Integer.MIN_VALUE, List.of()), false, tier);
+    }
+
+    /**
+     * A gap too long for a jump, even with a grab at the edge: it takes a dash with the sword in the air.
+     * Level only (a drop would give the jump more time in the air).
+     */
+    private Platform dash(Platform prev, int index, Tier tier) {
+        int dy = 0;
+        int level = theme.level();
+        int g = 7;
+        // Two deep along the dash (it moves a fixed distance, so a one-deep landing is luck), narrower when hard.
+        int w = level <= 6 ? between(2, 3) : 2;
+        int d = level <= 6 ? between(2, 3) : level <= 8 ? between(1, 2) : 1;
+        List<int[]> cells = shape(prev.maxX() + 1 + g, midZ(prev, d) + between(-1, 1), w, d, true);
+        double gap = gap(prev, cells);
+        if (gap <= JumpModel.maxGapNoDash(dy) || gap > JumpModel.maxDashGap(dy) - 0.25) {
+            return null;
+        }
+        int topY = prev.topY() + dy;
+        int nearX = Integer.MAX_VALUE;
+        for (int[] c : cells) {
+            nearX = Math.min(nearX, c[0]);
+        }
+        return finish(prev, index, cells, topY, Kind.NORMAL, path(prev, cells, topY),
+                new Extra(Move.DASH, 0, nearX, List.of(), nearX, Integer.MIN_VALUE, Themes.DASH_MARK), false, tier);
+    }
+
+    /**
+     * A dash jump with both ends marked: a take-off island whose far row glows, and the dash target after
+     * it whose near row glows. Built together (or not at all), so a glowing row always means a dash; the
+     * target is handed out by the next call. Never across an area start.
+     */
+    private Platform dashPair(Platform prev, int index, Tier tier) {
+        if (index + 1 >= nextSection) {
+            return null;
+        }
+        Platform takeOff = launchIsland(prev, index, tier, Theme.Feature.DASH);
+        if (takeOff == null) {
+            return null;
+        }
+        for (int attempt = 0; attempt < 12; attempt++) {
+            Platform target = dash(takeOff, index + 1, tier);
+            if (target != null) {
+                nextUp = target;
+                return takeOff;
+            }
+        }
+        forget(takeOff);
+        return null;
+    }
+
+    /**
+     * A bounce with its mushroom marked: the island with the mushroom on its far row (on a glowing block),
+     * and the higher island after it. Built together (or not at all); the target is handed out by the next
+     * call. Never across an area start.
+     */
+    private Platform bouncePair(Platform prev, int index, Tier tier) {
+        if (index + 1 >= nextSection) {
+            return null;
+        }
+        Platform pad = launchIsland(prev, index, tier, Theme.Feature.BOUNCE);
+        if (pad == null) {
+            return null;
+        }
+        int padZ = Integer.MIN_VALUE;
+        for (Placement b : pad.blocks()) {
+            if (b.block().equals(Themes.BOUNCE_PAD)) {
+                padZ = b.z();
+            }
+        }
+        for (int attempt = 0; attempt < 12 && padZ != Integer.MIN_VALUE; attempt++) {
+            Platform target = bounce(pad, index + 1, tier, padZ);
+            if (target != null) {
+                nextUp = target;
+                return pad;
+            }
+        }
+        forget(pad);
+        return null;
+    }
+
+    /**
+     * A ladder jump of the area, harder with the level: walk up to a tower right next to the island (always
+     * on levels 1-3, less later), jump at a ladder hanging on a tower across a gap (from level 4), or dash at
+     * it (from level 7, in areas with dash jumps).
+     */
+    private Platform climb(Platform prev, int index, Tier tier) {
+        int level = theme.level();
+        double r = rng.nextDouble();
+        if (level >= 7 && r < 0.3 && theme.features().contains(Theme.Feature.DASH)) {
+            return ladderDashPair(prev, index, tier);
+        }
+        if (level >= 4 && r < (level >= 7 ? 0.7 : 0.5)) {
+            return ladderTower(prev, index, tier, false);
+        }
+        return launch(Theme.Feature.CLIMB, prev, index, tier);
+    }
+
+    /**
+     * A tower across a gap with a ladder hanging on its near side: jump (or dash) at it, grab it in the air
+     * and climb up. For a jump the ladder starts 2 below the island's surface (a jump a bit short still
+     * catches it lower); for a dash it starts 2 above, 8 cells past the edge, out of reach of a jump.
+     */
+    private Platform ladderTower(Platform prev, int index, Tier tier, boolean dash) {
+        if (theme.ladder() == null) {
+            return null;
+        }
+        int level = theme.level();
+        int h = level <= 6 ? between(6, 7) : between(7, 8);
+        int topY = prev.topY() + h;
+        if (topY > maxY) {
+            return null;
+        }
+        int cellsPast = dash ? DASH_LADDER_CELLS : level <= 6 ? between(3, 4) : between(4, 5);
+        int ladderX = prev.maxX() + cellsPast;
+        // Straight ahead of a cell of the island's far row.
+        List<Integer> row = new ArrayList<>();
+        for (int i = 0; i < prev.cellCount(); i++) {
+            if (prev.cellX(i) == prev.maxX()) {
+                row.add(prev.cellZ(i));
+            }
+        }
+        int ladderZ = row.get(rng.nextInt(row.size()));
+        int x0 = ladderX + 1;
+        int tw = level <= 6 ? 2 : 1;
+        int td = level <= 8 ? 2 : 1;
+        List<int[]> cells = rect(x0, ladderZ - rng.nextInt(td), tw, td);
+        int low = dash ? prev.topY() + 3 : prev.topY() - 2;
+        List<Placement> ladder = new ArrayList<>();
+        for (int y = low; y <= topY; y++) {
+            ladder.add(Placement.attached(ladderX, y, ladderZ, theme.ladder(), Placement.EAST));
+        }
+        int[] path = {prev.maxX(), x0, Math.min(low, prev.topY() + 1), topY + 3, ladderZ, ladderZ};
+        // Deep enough that the tower stands behind every piece of the ladder.
+        int depth = topY - Math.min(low, prev.topY()) + 1 + between(1, 2);
+        return finish(prev, index, cells, topY, Kind.TOWER, path,
+                new Extra(dash ? Move.LADDER_DASH : Move.LADDER_JUMP, depth, x0, ladder), false, tier);
+    }
+
+    /** A dash at a ladder: a take-off island whose far row glows, then the tower with the ladder far ahead. */
+    private Platform ladderDashPair(Platform prev, int index, Tier tier) {
+        if (index + 1 >= nextSection) {
+            return null;
+        }
+        Platform takeOff = launchIsland(prev, index, tier, Theme.Feature.DASH);
+        if (takeOff == null) {
+            return null;
+        }
+        for (int attempt = 0; attempt < 12; attempt++) {
+            Platform target = ladderTower(takeOff, index + 1, tier, true);
+            if (target != null) {
+                nextUp = target;
+                return takeOff;
+            }
+        }
+        forget(takeOff);
+        return null;
+    }
+
+    /** An island with a bare far row for the ladder of the next platform. */
+    private Platform launch(Theme.Feature f, Platform prev, int index, Tier tier) {
+        Platform p = launchIsland(prev, index, tier, f);
+        if (p != null) {
+            pending = f;
+        }
+        return p;
+    }
+
+    /**
+     * The island a special jump starts from: the level's size and gap, a bare far row, and for a dash the
+     * far row glowing.
+     */
+    private Platform launchIsland(Platform prev, int index, Tier tier, Theme.Feature f) {
+        int dy = Math.max(-1, Math.min(1, pickDy(tier, prev.topY())));
+        int maxGap = tier.maxGapFor(dy);
+        int g = between(Math.min(tier.minGap, maxGap), maxGap);
+        // A bounce needs a cell to land on before the mushroom; a ladder can stand on a pillar on hard levels.
+        int[] size = f == Theme.Feature.BOUNCE ? size(tier, 2, false) : size(tier, 1, theme.level() >= 8);
+        int w = size[0];
+        int d = size[1];
+        int x0 = prev.maxX() + 1 + g;
+        List<int[]> cells = rect(x0, midZ(prev, d) + between(-1, 1), w, d);
+        double gap = gap(prev, cells);
+        if (gap > maxGap + 0.25 || !JumpModel.feasible(gap, dy)) {
+            return null;
+        }
+        int topY = prev.topY() + dy;
+        int farX = x0 + w - 1;
+        int z0 = cells.get(0)[1];
+        Extra extra = switch (f) {
+            case DASH -> new Extra(Move.JUMP, 0, farX, List.of(), farX, Integer.MIN_VALUE, Themes.DASH_MARK);
+            case BOUNCE -> {
+                // The mushroom stands on the far row, on a glowing block, so it is easy to see.
+                int padZ = z0 + between(0, d - 1);
+                yield new Extra(Move.JUMP, 0, farX, List.of(Placement.decor(farX, topY + 1, padZ, Themes.BOUNCE_PAD)),
+                        farX, padZ, Themes.BOUNCE_MARK);
+            }
+            default -> new Extra(Move.JUMP, 0, farX, List.of());
+        };
+        return finish(prev, index, cells, topY, Kind.NORMAL, path(prev, cells, topY), extra, false, tier);
+    }
+
+    /** The second island of a ladder or bounce jump; null when it does not fit (then a normal jump follows). */
+    private Platform secondStep(Theme.Feature f, Platform prev, int index, Tier tier) {
+        List<Integer> spots = new ArrayList<>();
+        for (int i = 0; i < prev.cellCount(); i++) {
+            if (prev.cellX(i) == prev.maxX() && free(prev, prev.maxX(), prev.topY() + 1, prev.cellZ(i))) {
+                spots.add(prev.cellZ(i));
+            }
+        }
+        if (spots.isEmpty()) {
+            return null;
+        }
+        int z = spots.get(rng.nextInt(spots.size()));
+        return tower(prev, index, tier, z);
+    }
+
+    /**
+     * A tower right next to the island before with a ladder up its side, from that island's surface up to
+     * the tower's top block (the player gets off at the top on their own).
+     */
+    private Platform tower(Platform prev, int index, Tier tier, int ladderZ) {
+        if (theme.ladder() == null) {
+            return null;
+        }
+        int level = theme.level();
+        // Higher than a jump and a pull-up at the edge reach, so the ladder is the only way up.
+        int h = level <= 3 ? 6 : level <= 6 ? between(6, 7) : between(7, 8);
+        h = Math.max((int) Math.floor(JumpModel.MANTLE_HEIGHT) + 2, Math.min(h, JumpModel.MAX_CLIMB));
+        int topY = prev.topY() + h;
+        if (topY > maxY) {
+            return null;
+        }
+        int x0 = prev.maxX() + 1;
+        // The top: 2 x 2 on easy levels, 1 x 2 from level 7, a single block from level 9.
+        int tw = level <= 6 ? 2 : 1;
+        int td = level <= 8 ? 2 : 1;
+        List<int[]> cells = rect(x0, ladderZ - rng.nextInt(td), tw, td);
+        List<Placement> ladder = new ArrayList<>();
+        for (int y = prev.topY() + 1; y <= topY; y++) {
+            ladder.add(Placement.attached(prev.maxX(), y, ladderZ, theme.ladder(), Placement.EAST));
+        }
+        int[] path = {prev.maxX(), x0, prev.topY() + 1, topY + 3, ladderZ, ladderZ};
+        return finish(prev, index, cells, topY, Kind.TOWER, path,
+                new Extra(Move.CLIMB, h + between(2, 3), x0, ladder), true, tier);
+    }
+
+    /**
+     * An island 5 or 6 blocks higher, reached with a bounce off a mushroom on the island before: higher than
+     * a jump and a pull-up at the edge reach.
+     */
+    private Platform bounce(Platform prev, int index, Tier tier, int padZ) {
+        int rise = theme.level() <= 6 ? 5 : between(5, 6);
+        if (rise <= JumpModel.MANTLE_HEIGHT) {
+            return null;
+        }
+        int topY = prev.topY() + rise;
+        if (topY > maxY) {
+            return null;
+        }
+        int padX = prev.maxX();
+        int level = theme.level();
+        int[] size = size(tier, 1, level >= 9);
+        int w = size[0];
+        int d = size[1];
+        int x0 = padX + 1 + (level <= 4 ? between(1, 2) : level <= 7 ? between(1, 3) : between(2, 3));
+        List<int[]> cells = shape(x0, padZ - d / 2 + between(-1, 1), w, d, true);
+        int[] xs = new int[cells.size()];
+        int[] zs = new int[cells.size()];
+        int minZ = padZ;
+        int maxZ = padZ;
+        for (int i = 0; i < cells.size(); i++) {
+            xs[i] = cells.get(i)[0];
+            zs[i] = cells.get(i)[1];
+            minZ = Math.min(minZ, zs[i]);
+            maxZ = Math.max(maxZ, zs[i]);
+        }
+        // The feet stand on the mushroom one block above the island and must get one above the target.
+        double reach = JumpModel.maxBounceGap(rise - 1);
+        if (reach < 0 || Platform.gap(new int[] {padX}, new int[] {padZ}, xs, zs) > reach - 0.25) {
+            return null;
+        }
+        int apex = prev.topY() + 2 + (int) Math.ceil(JumpModel.bounceApex()) + 1;
+        int[] path = {padX, x0, prev.topY() + 1, Math.max(topY + 3, apex), minZ, maxZ};
+        return finish(prev, index, cells, topY, Kind.NORMAL, path,
+                new Extra(Move.BOUNCE, 0, Integer.MIN_VALUE, List.of()), true, tier);
+    }
+
+    /**
+     * Builds a special island and keeps it when it fits: nothing in the way of its jump, room ahead, no clash.
+     * Beside: it stands right next to the island before (a tower) or puts a block on it (ladder, mushroom),
+     * so that island and the jump onto it do not count as a clash.
+     */
+    private Platform finish(Platform prev, int index, List<int[]> cells, int topY, Kind kind, int[] path, Extra extra,
+                            boolean beside, Tier tier) {
+        if (pathBlocked(path, prev) || !roomAhead(cells, topY, tier)) {
+            return null;
+        }
+        Platform p = build(index, theme, topY, cells, kind, topY - prev.topY(), gap(prev, cells), true, path, extra);
+        if (beside ? clashesBeside(p.boxes().get(0), prev) : clashes(p.boxes().get(0))) {
+            return null;
+        }
+        remember(p, path);
+        return p;
+    }
+
+    /**
+     * Side lengths {along X, along Z} of a special island from the level's platform sizes, at least minX
+     * along X; a single block only when pillarOk.
+     */
+    private int[] size(Tier tier, int minX, boolean pillarOk) {
+        int w = Math.max(minX, between(tier.minSize, tier.maxSize));
+        int d = between(tier.minSize, tier.maxSize);
+        if (w == 1 && d == 1 && !pillarOk) {
+            d = 2;
+        }
+        return new int[] {w, d};
+    }
+
+    /** Z of an island of depth d set in the middle of prev, pulled back towards the lane when it drifted far. */
+    private int midZ(Platform prev, int d) {
+        int prevD = prev.maxZ() - prev.minZ() + 1;
+        int z = prev.minZ() + (prevD - d) / 2;
+        int drift = (int) Math.round(prev.spawnZ() - laneZ);
+        if (Math.abs(drift) > maxDrift / 2) {
+            z += drift > 0 ? -1 : 1;
+        }
+        return z;
+    }
+
+    /** True when the island has nothing at this spot (no plant or other decoration). */
+    private static boolean free(Platform p, int x, int y, int z) {
+        for (Placement b : p.blocks()) {
+            if (b.x() == x && b.y() == y && b.z() == z) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     private int pickDy(Tier t, int y) {
         double r = rng.nextDouble();
         int dy = 0;
@@ -287,22 +726,29 @@ public final class CourseGenerator {
 
     private Platform build(int index, Theme th, int topY, List<int[]> top, Kind kind, int dy, double gap,
                            boolean decorate, int[] path) {
+        return build(index, th, topY, top, kind, dy, gap, decorate, path, Extra.NONE);
+    }
+
+    private Platform build(int index, Theme th, int topY, List<int[]> top, Kind kind, int dy, double gap,
+                           boolean decorate, int[] path, Extra extra) {
         List<Placement> solid = new ArrayList<>();
         List<Placement> decor = new ArrayList<>();
         boolean marked = kind == Kind.START || kind == Kind.GATE;
         int[] center = closestToCenter(top);
-        int maxDepth = switch (kind) {
+        int maxDepth = extra.depth() > 0 ? extra.depth() : switch (kind) {
             case START -> 5;
             case GATE -> 4;
             case PILLAR -> 3 + rng.nextInt(3);
+            case TOWER -> 5;
+            case BEAM -> 1;
             case NORMAL -> Math.min(5, 2 + top.size() / 3) + rng.nextInt(2);
         };
         body(th, topY, top, kind, maxDepth, marked ? center : null, solid, decor);
 
         // Plants on the surface.
-        if (kind != Kind.PILLAR && th.plantChance() > 0) {
+        if (kind != Kind.PILLAR && kind != Kind.BEAM && th.plantChance() > 0) {
             for (int[] c : top) {
-                if (marked && c[0] == center[0] && c[1] == center[1]) {
+                if ((marked && c[0] == center[0] && c[1] == center[1]) || c[0] == extra.bareX()) {
                     continue;
                 }
                 if (rng.nextDouble() < th.plantChance()) {
@@ -311,6 +757,18 @@ public final class CourseGenerator {
                     if (plant != null) {
                         decor.add(Placement.decor(c[0], topY + 1, c[1], plant));
                     }
+                }
+            }
+        }
+
+        decor.addAll(extra.attached());
+        if (extra.markX() != Integer.MIN_VALUE) {
+            // The mark of a dash or bounce: the top two layers of that row (or cell) glow.
+            for (int i = 0; i < solid.size(); i++) {
+                Placement b = solid.get(i);
+                if (b.x() == extra.markX() && (extra.markZ() == Integer.MIN_VALUE || b.z() == extra.markZ())
+                        && b.y() >= topY - 1) {
+                    solid.set(i, Placement.solid(b.x(), b.y(), b.z(), extra.mark()));
                 }
             }
         }
@@ -343,7 +801,8 @@ public final class CourseGenerator {
         for (Placement pl : all) {
             bottomY = Math.min(bottomY, pl.y());
         }
-        return new Platform(index, th, topY, bottomY, xs, zs, all, boxes, marked && index > 0, dy, gap, tint);
+        return new Platform(index, th, topY, bottomY, xs, zs, all, boxes, marked && index > 0, dy, gap, tint,
+                extra.move());
     }
 
     /**
@@ -367,7 +826,7 @@ public final class CourseGenerator {
         for (int[] c : top) {
             double t = Math.hypot(c[0] + 0.5 - cx, c[1] + 0.5 - cz) / (radius + 0.6);
             int depth;
-            if (kind == Kind.PILLAR) {
+            if (kind == Kind.PILLAR || kind == Kind.TOWER || kind == Kind.BEAM) {
                 depth = maxDepth;
             } else {
                 depth = (int) Math.round(1 + (maxDepth - 1) * (1 - t * t)) + rng.nextInt(3) - 1;
@@ -384,9 +843,9 @@ public final class CourseGenerator {
                     if (marker != null && c[0] == marker[0] && c[1] == marker[1]) {
                         block = th.marker().pick(rng);
                     } else {
-                        block = withFloor(th.top(), floor, th.fill());
+                        block = withFloor(kind == Kind.BEAM ? th.beam() : th.top(), floor, th.fill());
                     }
-                } else if (kind == Kind.PILLAR && k < depth - 1) {
+                } else if ((kind == Kind.PILLAR || kind == Kind.TOWER) && k < depth - 1) {
                     block = withFloor(th.pillar(), floor, th.bottom());
                 } else if (!th.accent().isEmpty() && rng.nextDouble() < th.accentChance()) {
                     block = withFloor(th.accent(), floor, th.bottom());
@@ -398,7 +857,7 @@ public final class CourseGenerator {
                 solid.add(Placement.solid(c[0], y, c[1], block));
             }
             int bottom = topY - depth + 1;
-            if (!th.hanging().isEmpty()
+            if (kind != Kind.BEAM && !th.hanging().isEmpty()
                     && rng.nextDouble() < th.hangingChance() * (depth >= maxDepth ? 1.0 : 0.5)) {
                 decor.add(Placement.hanging(c[0], bottom - 1, c[1], th.hanging().pick(rng)));
             }
@@ -574,6 +1033,31 @@ public final class CourseGenerator {
         return false;
     }
 
+    /**
+     * Like {@link #clashes} for an island that stands right next to prev or puts a block on it: prev's own
+     * island and the jump onto prev do not count.
+     */
+    private boolean clashesBeside(int[] box, Platform prev) {
+        int[] lastPath = paths.peekLast();
+        for (Platform r : recent) {
+            List<int[]> boxes = r.boxes();
+            for (int i = 0; i < boxes.size(); i++) {
+                if (r == prev && i == 0) {
+                    continue;
+                }
+                if (overlaps(box, boxes.get(i), 1)) {
+                    return true;
+                }
+            }
+        }
+        for (int[] p : paths) {
+            if (p != lastPath && overlaps(box, p, 1)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /** True when the space right in front of these cells (where the next platform goes) is free. */
     private boolean roomAhead(List<int[]> cells, int topY, Tier tier) {
         int maxX = Integer.MIN_VALUE;
@@ -680,6 +1164,14 @@ public final class CourseGenerator {
             }
         }
         return null;
+    }
+
+    /** Takes back the last platform remembered (a dash take-off whose target did not fit). */
+    private void forget(Platform p) {
+        if (recent.peekLast() == p) {
+            recent.removeLast();
+            paths.pollLast();
+        }
     }
 
     private void remember(Platform p, int[] path) {

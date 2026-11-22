@@ -1,0 +1,6 @@
+# «Duck» Parkour: item names (keys start with "endlessparkour.").
+
+items.EndlessParkour_Dash_Sword.name = Dash Sword
+items.EndlessParkour_Dash_Sword.description = Hold <color is="#ffffff">attack</color> to charge, let go to dash forward.
+items.EndlessParkour_Bounce_Mushroom.name = Bounce Mushroom
+items.EndlessParkour_Dash_Mark.name = Dash Crystal

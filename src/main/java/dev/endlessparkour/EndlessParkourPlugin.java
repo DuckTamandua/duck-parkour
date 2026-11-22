@@ -125,13 +125,24 @@ public final class EndlessParkourPlugin extends JavaPlugin {
     private List<Theme> checkedThemes() {
         TreeSet<String> missing = new TreeSet<>();
         List<Theme> out = new ArrayList<>();
+        // Special jumps the server leaves out: all of them when switched off, dash gaps without the sword.
+        java.util.EnumSet<Theme.Feature> off = java.util.EnumSet.noneOf(Theme.Feature.class);
+        if (!config.specialJumps) {
+            off = java.util.EnumSet.allOf(Theme.Feature.class);
+        } else if (!config.dashSword || !DashSword.available()) {
+            off.add(Theme.Feature.DASH);
+            if (config.dashSword) {
+                getLogger().at(Level.WARNING).log("The dash sword item %s is missing: no sword and no dash gaps",
+                        DashSword.ITEM);
+            }
+        }
         for (Theme t : Themes.ALL) {
             for (String n : t.blockNames()) {
                 if (!BlockPlacer.exists(n)) {
                     missing.add(n);
                 }
             }
-            out.add(t.filter(BlockPlacer::exists));
+            out.add(t.filter(BlockPlacer::exists).without(off));
         }
         if (!missing.isEmpty()) {
             getLogger().at(Level.WARNING).log("Unknown blocks left out of the biomes: %s", missing);

@@ -1,7 +1,10 @@
 package dev.endlessparkour.course;
 
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.List;
+import java.util.Random;
+import java.util.Set;
 import java.util.function.Predicate;
 
 /**
@@ -13,6 +16,20 @@ public final class Theme {
 
     /** A tree kind for decoration islands: trunk block and leaves block (no leaves: a stone pillar). */
     public record Tree(String trunk, String leaves) {
+    }
+
+    /** Special jumps an area can have besides the normal ones (see {@link CourseGenerator}). */
+    public enum Feature {
+        /** A tower with a ladder right next to an island: climb up to its top. */
+        CLIMB,
+        /** A mushroom on an island that bounces the player up onto a higher island. */
+        BOUNCE,
+        /** A long, one block wide beam. */
+        BEAM,
+        /** A drop far down onto an island below. */
+        DROP,
+        /** A gap too long to jump: it takes a dash with the sword. */
+        DASH
     }
 
     private static final Pick FALLBACK = Pick.of("Rock_Stone", 1);
@@ -40,6 +57,11 @@ public final class Theme {
     private final Pick tints;
     private final List<Tree> trees;
     private final Pick scatter;
+    private final String ladder;
+    private final Pick beam;
+    private final double featureChance;
+    private final List<Feature> features;
+    private final List<Integer> featureWeights;
 
     private Theme(Builder b) {
         this.id = b.id;
@@ -65,6 +87,11 @@ public final class Theme {
         this.tints = b.tints;
         this.trees = List.copyOf(b.trees);
         this.scatter = b.scatter;
+        this.ladder = b.ladder;
+        this.beam = b.beam;
+        this.featureChance = b.featureChance;
+        this.features = List.copyOf(b.features);
+        this.featureWeights = List.copyOf(b.featureWeights);
     }
 
     public static Builder builder(String id, String name) {
@@ -169,11 +196,60 @@ public final class Theme {
         return scatter;
     }
 
+    /** The ladder block of this area's towers (null: no ladders). */
+    public String ladder() {
+        return ladder;
+    }
+
+    /** Blocks of the long beams (the pillar block when not set). */
+    public Pick beam() {
+        return beam.isEmpty() ? pillar : beam;
+    }
+
+    /** Chance that a platform of this area is one of its special jumps. */
+    public double featureChance() {
+        return features.isEmpty() ? 0 : featureChance;
+    }
+
+    /** The special jumps of this area. */
+    public Set<Feature> features() {
+        return features.isEmpty() ? EnumSet.noneOf(Feature.class) : EnumSet.copyOf(features);
+    }
+
+    /** Picks one of the special jumps by weight (null when the area has none). */
+    public Feature pickFeature(Random rng) {
+        int total = 0;
+        for (int w : featureWeights) {
+            total += w;
+        }
+        if (total <= 0) {
+            return null;
+        }
+        int r = rng.nextInt(total);
+        for (int i = 0; i < features.size(); i++) {
+            r -= featureWeights.get(i);
+            if (r < 0) {
+                return features.get(i);
+            }
+        }
+        return features.get(features.size() - 1);
+    }
+
     /** All block names this theme uses (for checks against the server's blocks). */
     public List<String> blockNames() {
         List<String> out = new ArrayList<>();
-        for (Pick p : new Pick[] {top, fill, bottom, accent, marker, soilPlants, anyPlants, hanging, pillar, scatter}) {
+        for (Pick p : new Pick[] {top, fill, bottom, accent, marker, soilPlants, anyPlants, hanging, pillar, scatter, beam}) {
             out.addAll(p.names());
+        }
+        if (ladder != null) {
+            out.add(ladder);
+        }
+        if (features.contains(Feature.BOUNCE)) {
+            out.add(Themes.BOUNCE_PAD);
+            out.add(Themes.BOUNCE_MARK);
+        }
+        if (features.contains(Feature.DASH)) {
+            out.add(Themes.DASH_MARK);
         }
         for (Tree t : trees) {
             out.add(t.trunk());
@@ -186,6 +262,15 @@ public final class Theme {
 
     /** Drops blocks the server does not know; the main layers fall back to plain stone. */
     public Theme filter(Predicate<String> exists) {
+        return filter(exists, EnumSet.noneOf(Feature.class));
+    }
+
+    /** The same area without the given special jumps (for servers that turn them off). */
+    public Theme without(Set<Feature> off) {
+        return filter(n -> true, off);
+    }
+
+    private Theme filter(Predicate<String> exists, Set<Feature> off) {
         Builder b = new Builder(id, name);
         b.zone = zone;
         b.color = color;
@@ -212,8 +297,23 @@ public final class Theme {
             }
         }
         b.scatter = scatter.filter(exists);
+        b.ladder = ladder != null && exists.test(ladder) ? ladder : null;
+        b.beam = beam.filter(exists);
+        b.featureChance = featureChance;
+        for (int i = 0; i < features.size(); i++) {
+            Feature f = features.get(i);
+            // Without their marks (the plugin's own blocks) bounces and dashes would be unmarked or holed.
+            if (off.contains(f) || (f == Feature.CLIMB && b.ladder == null)
+                    || (f == Feature.BOUNCE && (!exists.test(Themes.BOUNCE_PAD) || !exists.test(Themes.BOUNCE_MARK)))
+                    || (f == Feature.DASH && !exists.test(Themes.DASH_MARK))) {
+                continue;
+            }
+            b.features.add(f);
+            b.featureWeights.add(featureWeights.get(i));
+        }
         return new Theme(b);
     }
+
 
     @Override
     public String toString() {
@@ -245,6 +345,11 @@ public final class Theme {
         private Pick tints = Pick.of("#5B9E28", 1);
         private final List<Tree> trees = new ArrayList<>();
         private Pick scatter = Pick.empty();
+        private String ladder;
+        private Pick beam = Pick.empty();
+        private double featureChance;
+        private final List<Feature> features = new ArrayList<>();
+        private final List<Integer> featureWeights = new ArrayList<>();
 
         private Builder(String id, String name) {
             this.id = id;
@@ -345,6 +450,28 @@ public final class Theme {
 
         public Builder scatter(Object... pairs) {
             this.scatter = Pick.of(pairs);
+            return this;
+        }
+
+        public Builder ladder(String block) {
+            this.ladder = block;
+            return this;
+        }
+
+        public Builder beam(String block) {
+            this.beam = Pick.of(block, 1);
+            return this;
+        }
+
+        /** Special jumps: the chance per platform, then pairs of feature and weight. */
+        public Builder features(double chance, Object... pairs) {
+            this.featureChance = chance;
+            this.features.clear();
+            this.featureWeights.clear();
+            for (int i = 0; i + 1 < pairs.length; i += 2) {
+                this.features.add((Feature) pairs[i]);
+                this.featureWeights.add((Integer) pairs[i + 1]);
+            }
             return this;
         }
 

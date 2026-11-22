@@ -9,6 +9,7 @@ import com.hypixel.hytale.component.system.CancellableEcsEvent;
 import com.hypixel.hytale.component.system.EntityEventSystem;
 import com.hypixel.hytale.server.core.event.events.ecs.BreakBlockEvent;
 import com.hypixel.hytale.server.core.event.events.ecs.DamageBlockEvent;
+import com.hypixel.hytale.server.core.event.events.ecs.DropItemEvent;
 import com.hypixel.hytale.server.core.event.events.ecs.PlaceBlockEvent;
 import com.hypixel.hytale.server.core.universe.world.World;
 import com.hypixel.hytale.server.core.universe.world.storage.EntityStore;
@@ -26,6 +27,7 @@ final class Protection {
         plugin.getEntityStoreRegistry().registerSystem(new NoBreak(parkour));
         plugin.getEntityStoreRegistry().registerSystem(new NoDamage(parkour));
         plugin.getEntityStoreRegistry().registerSystem(new NoPlace(parkour));
+        plugin.getEntityStoreRegistry().registerSystem(new NoDrop(parkour));
     }
 
     static final class NoBreak extends Deny<BreakBlockEvent> {
@@ -37,6 +39,13 @@ final class Protection {
     static final class NoDamage extends Deny<DamageBlockEvent> {
         NoDamage(Supplier<World> parkour) {
             super(DamageBlockEvent.class, parkour);
+        }
+    }
+
+    /** Players keep their dash sword: nothing can be dropped in the parkour world. */
+    static final class NoDrop extends Deny<DropItemEvent.PlayerRequest> {
+        NoDrop(Supplier<World> parkour) {
+            super(DropItemEvent.PlayerRequest.class, parkour);
         }
     }
 

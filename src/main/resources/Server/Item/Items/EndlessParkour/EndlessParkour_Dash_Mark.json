@@ -1,0 +1,55 @@
+{
+  "$Comment": "«Duck» Parkour: the mark at both ends of a dash jump. Hytale's purple crystal block (Rock_Crystal_Purple_Block) with purple sparks.",
+  "TranslationProperties": {
+    "Name": "endlessparkour.items.EndlessParkour_Dash_Mark.name"
+  },
+  "Icon": "Icons/ItemsGenerated/Rock_Crystal_Purple.png",
+  "Categories": [
+    "Blocks.Rocks"
+  ],
+  "BlockType": {
+    "Material": "Solid",
+    "DrawType": "Cube",
+    "Opacity": "Transparent",
+    "Group": "Stone",
+    "Flags": {},
+    "Gathering": {
+      "Breaking": {
+        "GatherType": "Rocks"
+      }
+    },
+    "BlockParticleSetId": "Crystal",
+    "Textures": [
+      {
+        "Sides": "BlockTextures/Rock_Crystal_Purple.png",
+        "UpDown": "BlockTextures/Rock_Crystal_Purple_Top.png",
+        "Weight": 1
+      }
+    ],
+    "ParticleColor": "#a534cb",
+    "BlockSoundSetId": "Crystal",
+    "PhysicalMaterialId": "Stone",
+    "CubeShadingMode": "Reflective",
+    "Light": {
+      "Color": "#c8f"
+    },
+    "Particles": [
+      {
+        "SystemId": "Block_Gem_Sparks",
+        "Color": "#c88cff",
+        "TargetEntityPart": "Self",
+        "PositionOffset": {
+          "Y": 0.5
+        }
+      }
+    ],
+    "VariantRotation": "Pipe",
+    "TextureComputedColor": "#3B1C38"
+  },
+  "PlayerAnimationsId": "Block",
+  "Tags": {
+    "Type": [
+      "Rock"
+    ]
+  }
+}

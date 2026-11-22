@@ -202,7 +202,12 @@ final class IslandMover {
                 n++;
             }
             this.solids = n;
-            this.objectCount = style == PlantStyle.LAND ? n : blocks.size();
+            // Blocks that lean on a wall (ladders) come last and never fly: they appear with the landing.
+            int flying = blocks.size();
+            while (flying > n && blocks.get(flying - 1).attached()) {
+                flying--;
+            }
+            this.objectCount = style == PlantStyle.LAND ? n : flying;
             this.objects = new Object[objectCount];
             this.sent = new byte[objectCount];
         }
@@ -1009,7 +1014,12 @@ final class IslandMover {
             }
         }
         for (Placement p : blocks) {
-            if (p.decor()) {
+            if (p.decor() && !p.attached()) {
+                out.add(p);
+            }
+        }
+        for (Placement p : blocks) {
+            if (p.attached()) {
                 out.add(p);
             }
         }

@@ -10,7 +10,7 @@ changing behaviour; most things are already config switches (see "Adapting").
 
 ## What it is
 
-An endless, procedurally generated jump course in the sky (version 1.3.6, built for the Hytale server
+An endless, procedurally generated jump course in the sky (version 1.4.4, built for the Hytale server
 0.7.7, Java 25). Every run starts on a start island in the green "Drifting Plains" and goes on forever
 through 18 areas modelled on Orbis (vanilla names, blocks, plants, grass colours, trees, weather,
 music). Falling ends the run; the next run is a brand-new course. A shared top list keeps everyone's best.
@@ -21,6 +21,9 @@ music). Falling ends the run; the next run is a brand-new course. A shared top l
   start (never the same twice in a row; easy areas come back). Areas are 22 to 45 platforms long.
 - Every jump is checked against Hytale's real movement numbers (see `course/JumpModel.java`); nothing
   of another island ever stands in the way of a jump.
+- **Special jumps** (1.4.0, see "Special jumps and the dash sword"): ladder towers, bounce mushrooms,
+  beams, deep drops and dash gaps, each area with its own mix, ladder style and beam block.
+- **Dash sword**: every player holds it; hold attack to charge, let go to dash forward.
 - **Islands glide in and away** (smooth block objects, see "Flights"). Plants/leaves follow a per-player
   style (`/parkour plants grow|fly|land`, default `grow`).
 - Side panel (HUD) with area, score, best + rank, top 5. Unlimited stamina, no block breaking or placing,
@@ -62,12 +65,14 @@ music). Falling ends the run; the next run is a brand-new course. A shared top l
 | --- | --- |
 | `EndlessParkourPlugin` | Plugin entry: config, top list, command, events (join/ready/disconnect), block protection, flight ticker, scheduler. |
 | `RunManager` | The heart: runs per player (start, progress, fall, finish, leave), lanes, join flow, HUD, titles, sounds, area weather, flights. |
-| `Run` | One player's run: lane, generator, live platforms (deque), score, HUD, pending flights. |
+| `Run` | One player's run: lane, generator, live platforms (deque), score, HUD, pending flights, dash watch. |
+| `DashSword` | Gives the dash sword into the hand (and takes it back on a lobby server). |
 | `course/CourseGenerator` | Pure logic, no game calls, deterministic per seed: next platform, shapes, decoration islands, jump-path rules. |
 | `course/Themes`, `Theme` | The 18 areas: blocks, plants, tints, trees, weather, environment, sound, level. |
 | `course/Tier` | Jump settings per level 1–10 (gaps, drops, chances, sizes); clamped by `JumpModel`. |
 | `course/JumpModel` | Hytale physics: gravity 32, jump force 11.8 (apex 2.18), run 5.5, sprint x1.273, half width 0.325, safety 0.8. |
-| `course/Platform`, `Placement`, `Pick` | A generated island; one block; weighted pick lists. |
+| `course/Platform`, `Placement`, `Pick` | A generated island (with its `Move`); one block (ladders: `attached`, `facing`); weighted pick lists. |
+| `course/Move` | How the player gets onto a platform: jump, climb, bounce, dash, drop. |
 | `BlockPlacer` | Places/clears blocks (quiet, no drops), async section loading, grass tint per column, environment per section. |
 | `IslandMover` | Flights: plans the way in, moves block objects every tick, lands/lifts islands, plant styles. |
 | `EntityBlocks` / `FlyingBlocks` / `BlockAccess` | Block objects (Hytale block entities) / their interface / block interface (fakes in tests). |
@@ -97,9 +102,77 @@ music). Falling ends the run; the next run is a brand-new course. A shared top l
    score, new platform(s) fly in ahead, old ones (`PlatformsBehind` = 3) fly away; a new area → title
    (area name + zone), discovery sound, weather. Falling `FallDistance` below the platforms → fail.
 4. **Fail.** Score goes to the top list (record announcement), flights are cancelled, the old course is
-   cleared, a new run starts in the same lane and the player is teleported to its start.
+   cleared, a new run starts in the same lane right after the old course (`RunManager.startX`, 24 blocks
+   past its last platform) and the player is teleported to its start. (Until 1.4.2 every run started at
+   x = 0: after a long run that part of the world had gone to sleep, and for over a minute islands could
+   not fly in there and flying objects vanished: "no more islands".)
 5. **Disconnect / leave.** The run ends (score kept), flights cancelled, course cleared, lane freed.
    Verified: nothing is left behind (`parkour scan` 0 blocks, no objects).
+
+## Special jumps and the dash sword (1.4.0)
+
+- **Where they come from**: `Theme.features(chance, Feature, weight, ...)` per area in `course/Themes.java`
+  (plus `.ladder(...)` and `.beam(...)`). `CourseGenerator.next` tries one with that chance from platform 3
+  on, never on an area start and never two in a row (`sinceFeature`). How the player gets onto each
+  platform is `Platform.move()` (`course/Move`: JUMP, CLIMB, BOUNCE, DASH, DROP); beams are normal jumps.
+- **Two-island jumps**: a ladder tower first builds an island with a bare far row (`launch`, `Extra.bareX`),
+  then the tower (`secondStep`), which owns the ladder it puts on that island (it comes and goes with the
+  tower; `clashesBeside` lets it touch the island). Dashes and bounces are built as pairs in one go
+  (`dashPair`, `bouncePair`: the take-off island, then the target, handed out by the next `next()` call via
+  `nextUp`; if the target does not fit, `forget` takes the take-off back), so a mark always means its jump.
+- **Ladder jumps** (1.4.4, owner: "Jumps wo man an Leitern springen muss bzw. dashen"): `climb` picks by
+  level: walk-up towers (always on levels 1-3), `LADDER_JUMP` from level 4 (a tower 3-5 cells past the
+  island's edge, the ladder hanging in the gap from 2 below the surface, so a short jump still catches it)
+  and `LADDER_DASH` from level 7 in areas with dash jumps (8 cells past a glowing take-off, the ladder from
+  2 above the surface: `JumpModel.travelAbove` shows a jump cannot touch it without a dash). Grabbing a
+  ladder in the air was not tried in play yet.
+- **Hytale's pull-up at edges** ("mantling", the builtin plugin `Hytale:Mantling` turns on
+  `ClientFeature.Mantling`; the server sees `MovementStates.mantling`): players grab ledges and pull up.
+  The owner wants it kept, but it must not skip special jumps: towers (6-8) and bounce targets (5-6) stand
+  higher than `JumpModel.MANTLE_HEIGHT` (4.5, a cautious guess: apex 2.18 + about 2 of reach), and dash
+  gaps (7) are longer than `maxGapNoDash` (a perfect sprint jump plus `MANTLE_REACH` 1 for the grab). Every
+  pull-up is logged ("Pull-up of <name>: +N blocks, onto platform ..."): check the guess there. Normal
+  jumps can still be saved by grabbing the edge. (The server config could turn it off with
+  `"Mods": {"Hytale:Mantling": {"Enabled": false}}`, read by `PluginManager.canLoadOnBoot`; untested.)
+- **Marks**: both ends of a dash glow purple and sparkle (`Themes.DASH_MARK` = the plugin's own block
+  `EndlessParkour_Dash_Mark`: the purple crystal block plus `Block_Gem_Sparks` particles; top two layers of the
+  take-off's far row and the target's near row). The bounce mushroom is the plugin's own block too
+  (`EndlessParkour_Bounce_Mushroom`: the bouncy shelf mushroom with the yellow texture, light and Hytale's
+  `Dungeon_Goblin_Indicator_Mushroom_Bouncy` particles, a beam with rings made for bouncy mushrooms) and
+  stands on a glowing yellow crystal (`Themes.BOUNCE_MARK`). None of these is used anywhere else (GeneratorTest
+  checks). Without these blocks (asset pack missing) `Theme.filter` drops dashes and bounces.
+- **Ladders**: `Placement.attached(... facing)` leans on the wall on that side of its cell.
+  `BlockPlacer.wallTurns` picks the turn from the game's own turned hitboxes (no guessing which way a turn
+  goes); the self test reads every ladder back ("Ladders: N lean on their tower, 0 turned wrong"). They
+  run from the island's surface up to the tower's top block: the player gets off at the top on their own
+  (1.4.0 put one piece above the edge; the owner: not needed). Ladders
+  never fly (`IslandMover` makes no objects for attached blocks): they appear when the tower lands.
+- **Bounce**: the mushroom (`EndlessParkour_Bounce_Mushroom`, made from `Plant_Crop_Mushroom_Shelve_Brown`:
+  MovementSettings IsBouncy, BounceVelocity 20) stands on the far row of the pad island (its own block). The course counts on the
+  game's 20 blocks/s (lifts 6.25) with `BOUNCE_SPARE` 0.75 and keeps the space up to the top free. Every
+  bounce is logged ("Bounce of <name>: rose N blocks"): not measured in play yet.
+- **Dash sword** (asset pack in `src/main/resources/Server`, `IncludesAssetPack` true, `build.ps1` copies
+  all resources): item `EndlessParkour_Dash_Sword` (Parent `Weapon_Sword_Mithril`, Primary
+  `Root_EndlessParkour_Dash`), a `Charging` interaction (0.25 s, AllowIndefiniteHold) and the dash: a
+  `CooldownCondition`/`TriggerCooldown` (1 s) and `ApplyForce` (Force 20, Duration 0.25, ChangeVelocityType
+  Set, level along the view). `DashSword` gives it into the hand at every run start, `Protection.NoDrop`
+  stops drops. The client computes forced movement itself (`SplitVelocity` is a client feature), so the
+  dash reach is not known from the server; measured in play (log "Dash of <name>: N blocks in T s, ...
+  more than sprinting"): in the air 6.5-8 blocks in about 0.4 s, 3.8 to 5.1 more than sprinting; the course
+  counts on 3.8 (`JumpModel.DASH_GAIN`). Every special jump reached is logged too ("CLIMB of <name> onto
+  platform ... in T s"; climbing is about 2-3 blocks/s).
+- **Harder with the level** (1.4.2, owner: special jumps must not soften the top levels): special islands take
+  the level's platform sizes (`size(tier, ...)`), tower tops 2 x 2 / 1 x 2 from level 7 / 1 x 1 from 9, dash
+  targets two deep along the dash (a dash moves a fixed distance) and 2 x 1 from level 9, bounces 2-3 away
+  from level 8, beams 4-5 / 3-4 / 3 long. 1.4.1's specials (always 2-3 big) made levels 8-10 easier and 9 = 10;
+  `GeneratorTest` now checks over ALL platforms that every level from 3 on asks more than the one before
+  and the top level stays at 66 % or more (measured 0, 0, 4, 14, 22, 30, 49, 60, 66, 71 %; 1.3.6 without
+  specials: 0, 0, 5, 10, 18, 25, 49, 59, 64, 72 %).
+- **Config**: `SpecialJumps` (all off), `DashSword` (no sword, no dash gaps; also when the item is missing).
+- **The asset pack can stop the server**: a pack asset that fails the server's checks (once: an icon path
+  that does not exist) makes the server refuse to start ("Mod EndlessParkour:EndlessParkour failed to load",
+  exit code 6). `AssetPackTest` (in `build.ps1`) checks every game file, parent, particle system and sound the
+  pack names against Assets.zip (`$env:ASSETS_ZIP` or `..\hytale-testserver\Assets.zip`).
 
 ## Flights (smooth islands) — read before touching `IslandMover`
 
@@ -225,6 +298,8 @@ flying island is therefore a set of **block entities** (`BlockEntity` component 
 
 ## Known limits and open points
 
+- Not yet seen in play: bounces and drops (the bounce height is the asset's value) and the real reach of
+  Hytale's pull-up at edges (`MANTLE_HEIGHT` is a guess; the log shows every pull-up).
 - Several players at once: lanes and flights are per player, but the plugin was only played by one person.
   Watch entity counts and tick times with more players (`parkour selftest --fly=true` prints timings).
 - Block objects look plainer than blocks while flying (client side); plants are the most visible case.
